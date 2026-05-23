@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bili-analyzer"
+version = "1.0.0"
+description = "B站视频分析器 - 自动提取知识点并生成学习笔记"
+requires-python = ">=3.9"
+dependencies = [
+    "pyyaml>=6.0",
+    "requests>=2.28.0",
+    "yt-dlp>=2024.0.0",
+    "tqdm>=4.60.0",
+]
+
+[project.optional-dependencies]
+zhipu = ["zhipuai>=2.0.0"]
+deepseek = ["openai>=1.0.0"]
+whisper = ["openai-whisper>=20231117"]
+volcengine = []
+all = ["zhipuai>=2.0.0", "openai>=1.0.0", "openai-whisper>=20231117"]
+dev = ["pytest>=7.0", "ruff>=0.1.0"]
+
+[project.scripts]
+bili-analyzer = "bili_analyzer.cli:main"
+ba = "bili_analyzer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
