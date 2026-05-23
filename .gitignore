@@ -6,6 +6,7 @@ build/
 *.egg
 
 .trae/
+.gh_config/
 
 outputs/
 logs/
