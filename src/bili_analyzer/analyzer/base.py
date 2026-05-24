@@ -43,7 +43,9 @@ def build_analysis_prompt(video_info: Dict, srt_content: str) -> str:
         "2. **章节划分**: 根据内容逻辑划分3-6个章节,每章节包含时间范围和内容描述\n"
         "3. **知识点提取**: 提取10-20个关键知识点,按重要程度排序,包含详细说明\n"
         "4. **关键截图**: 识别6-10个需要截图的关键时间点(图表、公式、演示、重要概念等)\n"
-        "5. **专业术语**: 提取10-15个重要的专业术语及其定义\n\n"
+        "5. **专业术语**: 提取10-15个重要的专业术语及其定义\n"
+        "6. **关键词提取**: 提取3-8个最能代表视频内容的关键词\n"
+        "7. **内容总结**: 用200-400字对视频内容作整体总结，概括核心观点和结论\n\n"
         "**输出格式**: 请严格按照以下 JSON 格式返回分析结果(不要包含任何其他文字):\n\n"
         "```json\n"
         "{\n"
@@ -76,7 +78,9 @@ def build_analysis_prompt(video_info: Dict, srt_content: str) -> str:
         '      "term": "专业术语名称",\n'
         '      "definition": "术语的学术定义"\n'
         "    }\n"
-        "  ]\n"
+        "  ],\n"
+        '  "keywords": ["关键词1", "关键词2", "关键词3"],\n'
+        '  "conclusion": "对视频内容的整体总结，200-400字，概括核心观点和结论"\n'
         "}\n"
         "```\n\n"
         "**注意事项**:\n"
@@ -85,8 +89,30 @@ def build_analysis_prompt(video_info: Dict, srt_content: str) -> str:
         "- 截图时间点优先选择包含图表、公式、关键概念展示的画面\n"
         "- 专业术语定义要准确、简洁\n"
         "- 使用专业学术表述,避免口语化\n"
-        "- 确保JSON格式完全正确,可以被解析\n\n"
+        "- 确保JSON格式完全正确,可以被解析\n"
+        "- 关键词应具有代表性和专业性\n"
+        "- 内容总结要全面概括，突出核心观点和最终结论\n\n"
         "请开始分析并返回标准JSON格式的结果。"
+    )
+    return prompt
+
+
+def build_format_transcript_prompt(srt_content: str) -> str:
+    prompt = (
+        "请对以下视频字幕内容进行语义分段排版。\n\n"
+        "**要求**:\n"
+        "1. 根据语义（话题转换、逻辑段落）将字幕分为若干段落，每段对应一个完整的话题\n"
+        "2. 每段格式如下:\n"
+        "   - 第一行: 【HH:MM:SS — HH:MM:SS】（该段的起止时间，不含毫秒）\n"
+        "   - 第二行: 　　段落正文（前缀两个全角空格缩进）\n"
+        "   - 段落之间空一行\n"
+        "3. 不要遗漏任何字幕内容\n"
+        "4. 直接输出排版后的纯文本，不要输出任何解释、标题或额外标记\n\n"
+        "**字幕内容**:\n"
+        "```\n"
+        f"{srt_content}\n"
+        "```\n\n"
+        "请开始排版。"
     )
     return prompt
 
@@ -99,6 +125,9 @@ def parse_llm_response(response: str) -> Dict[str, Any]:
     2. Markdown代码块: ```json {...} ```
     3. 带前后文字的: ...前文... {...} ...后文...
     """
+    if not response or not response.strip():
+        raise ValueError("LLM 返回内容为空")
+
     response = response.strip()
 
     # 去除 Markdown 代码块
@@ -114,14 +143,17 @@ def parse_llm_response(response: str) -> Dict[str, Any]:
     end_idx = response.rfind("}")
 
     if start_idx == -1 or end_idx == -1 or start_idx >= end_idx:
-        raise ValueError("未找到有效的JSON对象")
+        # 打印前500字符便于调试
+        preview = response[:500].replace("\n", " ")
+        raise ValueError(f"未找到有效的JSON对象，响应预览: {preview}")
 
     json_str = response[start_idx:end_idx + 1]
 
     try:
         return json.loads(json_str)
     except json.JSONDecodeError as e:
-        raise ValueError(f"JSON解析失败: {e}")
+        preview = response[:500].replace("\n", " ")
+        raise ValueError(f"JSON解析失败: {e}，响应预览: {preview}")
 
 
 def validate_analysis_result(result: Dict[str, Any]) -> None:
@@ -139,6 +171,15 @@ def validate_analysis_result(result: Dict[str, Any]) -> None:
 
     if not isinstance(result["key_screenshots"], list) or len(result["key_screenshots"]) < 2:
         raise ValueError("关键截图数量不足(至少需要2个)")
+
+    if "keywords" not in result:
+        raise ValueError("缺少必需字段: keywords")
+    if not isinstance(result["keywords"], list) or len(result["keywords"]) < 3:
+        raise ValueError("关键词数量不足(至少需要3个)")
+    if "conclusion" not in result:
+        raise ValueError("缺少必需字段: conclusion")
+    if not isinstance(result["conclusion"], str) or len(result["conclusion"]) < 50:
+        raise ValueError("内容总结长度不足")
 
 
 class BaseAnalyzer(ABC):
@@ -161,6 +202,18 @@ class BaseAnalyzer(ABC):
     @abstractmethod
     def name(self) -> str:
         """分析器名称"""
+        ...
+
+    @abstractmethod
+    def format_transcript(self, srt_content: str) -> str:
+        """对字幕原文进行语义分段排版
+
+        Args:
+            srt_content: 原始 SRT 字幕内容
+
+        Returns:
+            str: 段落化排版后的纯文本
+        """
         ...
 
     def save_analysis(self, result: Dict[str, Any], output_path: Path) -> None:

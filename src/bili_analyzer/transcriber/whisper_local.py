@@ -27,6 +27,26 @@ class WhisperTranscriber(BaseTranscriber):
                 return candidates[0]
         return None
 
+    def _get_whisper_cache_dir(self) -> Path:
+        return Path.home() / ".cache" / "whisper"
+
+    def _find_cached_model(self) -> Optional[Path]:
+        cache_dir = self._get_whisper_cache_dir()
+        cached_file = cache_dir / f"{self.model}.pt"
+        if cached_file.exists():
+            return cached_file
+        return None
+
+    def _get_model_download_url(self) -> str:
+        try:
+            import whisper
+            version = getattr(whisper, "__version__", "v20231117")
+        except ImportError:
+            version = "v20231117"
+        if not version.startswith("v"):
+            version = f"v{version}"
+        return f"https://github.com/openai/whisper/releases/download/{version}/{self.model}.pt"
+
     def transcribe(self, video_path: Path, output_dir: Path) -> Path:
         try:
             import whisper
@@ -49,11 +69,18 @@ class WhisperTranscriber(BaseTranscriber):
             logging.getLogger("whisper").setLevel(logging.WARNING)
             whisper_model = whisper.load_model(str(local_model))
         else:
-            print(f"正在使用 Whisper ({self.model}) 转录...")
-            print("提示: 本地未找到模型文件，将从网络下载（首次使用需等待）")
-            print(f"  可将模型文件放入 {self.model_path.resolve()} 目录以加速加载")
-            logging.getLogger("whisper").setLevel(logging.WARNING)
-            whisper_model = whisper.load_model(self.model)
+            cached_model = self._find_cached_model()
+            if cached_model:
+                print(f"正在从缓存加载模型: {cached_model.name}")
+                logging.getLogger("whisper").setLevel(logging.WARNING)
+                whisper_model = whisper.load_model(self.model)
+            else:
+                print(f"正在使用 Whisper ({self.model}) 转录...")
+                print("提示: 本地未找到模型文件，将从网络下载")
+                print(f"  下载地址: {self._get_model_download_url()}")
+                print(f"  缓存目录: {self._get_whisper_cache_dir()}")
+                logging.getLogger("whisper").setLevel(logging.WARNING)
+                whisper_model = whisper.load_model(self.model)
 
         print("正在进行语音识别，请耐心等待...")
         result = whisper_model.transcribe(

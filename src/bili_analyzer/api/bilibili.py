@@ -1,5 +1,7 @@
 """B站 API 接口 - 视频信息获取与CC字幕获取"""
 
+import json
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +10,8 @@ from typing import Dict, List, Optional
 import requests
 
 from bili_analyzer.api.wbi import sign_params
+
+logger = logging.getLogger("bili_analyzer")
 
 
 @dataclass
@@ -20,6 +24,15 @@ class VideoInfo:
     duration: int  # 秒
     cid: int
     desc: str = ""
+
+
+@dataclass
+class PageInfo:
+    """分P信息"""
+    cid: int
+    title: str
+    duration: int  # 秒
+    page: int  # 分P序号
 
 
 @dataclass
@@ -41,6 +54,31 @@ class SubtitleLine:
 
 
 # 请求头
+def _request_with_retry(session, url, params=None, max_retries=3, timeout=15):
+    for attempt in range(max_retries):
+        try:
+            resp = session.get(url, params=params, timeout=timeout)
+            if resp.status_code >= 500:
+                if attempt < max_retries - 1:
+                    import time as _time
+                    _time.sleep(2 ** attempt)
+                    continue
+                raise RuntimeError(f"API 请求失败: HTTP {resp.status_code}")
+            return resp
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                import time as _time
+                _time.sleep(2 ** attempt)
+                continue
+            raise RuntimeError(f"API 请求超时: {url}")
+        except requests.exceptions.ConnectionError:
+            if attempt < max_retries - 1:
+                import time as _time
+                _time.sleep(2 ** attempt)
+                continue
+            raise RuntimeError(f"API 连接错误: {url}")
+
+
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Referer": "https://www.bilibili.com",
@@ -111,11 +149,7 @@ def get_video_info(bvid: str) -> VideoInfo:
         RuntimeError: API 调用失败
     """
     session = _get_session()
-    resp = session.get(
-        "https://api.bilibili.com/x/web-interface/view",
-        params={"bvid": bvid},
-        timeout=15,
-    )
+    resp = _request_with_retry(session, "https://api.bilibili.com/x/web-interface/view", params={"bvid": bvid})
 
     data = resp.json()
     if data["code"] != 0:
@@ -133,8 +167,42 @@ def get_video_info(bvid: str) -> VideoInfo:
     )
 
 
+def get_pages(bvid: str) -> List[PageInfo]:
+    """获取视频分P信息列表
+
+    Args:
+        bvid: BV 号
+
+    Returns:
+        List[PageInfo]: 分P信息列表
+
+    Raises:
+        RuntimeError: API 调用失败
+    """
+    session = _get_session()
+    resp = _request_with_retry(session, "https://api.bilibili.com/x/web-interface/view", params={"bvid": bvid})
+
+    data = resp.json()
+    if data["code"] != 0:
+        raise RuntimeError(f"获取视频分P信息失败: {data.get('message', '未知错误')}")
+
+    pages = data["data"].get("pages", [])
+    result = []
+    for p in pages:
+        result.append(PageInfo(
+            cid=p.get("cid", 0),
+            title=p.get("part", ""),
+            duration=p.get("duration", 0),
+            page=p.get("page", 0),
+        ))
+    return result
+
+
 def get_subtitle_metas(aid: int, cid: int) -> List[SubtitleMeta]:
     """获取视频的 CC 字幕元数据列表
+
+    使用旧接口 /x/player/v2 绕过 WBI 签名风控。
+    需要先访问B站首页获取 buvid3 等浏览器指纹 cookie。
 
     Args:
         aid: av 号
@@ -145,26 +213,22 @@ def get_subtitle_metas(aid: int, cid: int) -> List[SubtitleMeta]:
     """
     session = _get_session()
 
-    # 需要 Wbi 签名
-    params = sign_params({"aid": str(aid), "cid": str(cid)})
+    # 先访问B站首页获取 buvid3 等浏览器指纹 cookie（关键！）
+    try:
+        session.get("https://www.bilibili.com", timeout=10)
+    except Exception:
+        pass
 
-    resp = session.get(
-        "https://api.bilibili.com/x/player/wbi/v2",
-        params=params,
-        timeout=15,
+    # 使用旧接口，不需要 WBI 签名
+    resp = _request_with_retry(
+        session, "https://api.bilibili.com/x/player/v2",
+        params={"aid": aid, "cid": cid}
     )
 
     data = resp.json()
     if data["code"] != 0:
-        # Wbi 签名失败时尝试不带签名
-        resp = session.get(
-            "https://api.bilibili.com/x/player/wbi/v2",
-            params={"aid": aid, "cid": cid},
-            timeout=15,
-        )
-        data = resp.json()
-        if data["code"] != 0:
-            return []
+        logger.warning(f"获取字幕元数据失败: code={data.get('code')}, message={data.get('message')}")
+        return []
 
     subtitles = data.get("data", {}).get("subtitle", {}).get("subtitles", [])
 
@@ -185,17 +249,46 @@ def get_subtitle_metas(aid: int, cid: int) -> List[SubtitleMeta]:
     return result
 
 
-def get_subtitle_content(meta: SubtitleMeta) -> List[SubtitleLine]:
+def get_subtitle_content(meta: SubtitleMeta, cookies: Optional[Dict[str, str]] = None) -> List[SubtitleLine]:
     """获取字幕内容
 
     Args:
         meta: 字幕元数据
+        cookies: B站 Cookie 字典，用于访问需要登录的字幕资源
 
     Returns:
         List[SubtitleLine]: 字幕行列表
     """
-    resp = requests.get(meta.url, headers=_HEADERS, timeout=15)
-    data = resp.json()
+    session = _get_session()
+
+    # 如果有 Cookie，设置到 session
+    if cookies:
+        for name, value in cookies.items():
+            session.cookies.set(name, value, domain=".bilibili.com")
+            session.cookies.set(name, value, domain=".hdslb.com")
+
+    resp = session.get(meta.url, timeout=15)
+
+    # 检查响应状态
+    if resp.status_code != 200:
+        logger.warning(f"字幕内容请求失败: HTTP {resp.status_code}, url={meta.url}")
+        return []
+
+    text = resp.text.strip()
+    if not text:
+        logger.warning(f"字幕内容为空: url={meta.url}")
+        return []
+
+    # 清洗 BOM 等不可见前缀字符
+    if text.startswith('\ufeff'):
+        text = text[1:]
+
+    # 尝试解析 JSON
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        logger.warning(f"字幕内容 JSON 解析失败: {e}, url={meta.url}, 内容前500字符: {text[:500]!r}")
+        return []
 
     lines = []
     for item in data.get("body", []):
@@ -234,7 +327,13 @@ def subtitle_to_srt(lines: List[SubtitleLine]) -> str:
     return "\n".join(srt_parts)
 
 
-def fetch_cc_subtitle(bvid: str, prefer_human: bool = True) -> Optional[str]:
+def fetch_cc_subtitle(
+    bvid: str,
+    prefer_human: bool = True,
+    prefer_language: str = "zh",
+    cid: Optional[int] = None,
+    cookies: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
     """获取 B站视频的 CC 字幕（便捷方法）
 
     优先获取人工字幕，无 CC 字幕时返回 None。
@@ -242,28 +341,39 @@ def fetch_cc_subtitle(bvid: str, prefer_human: bool = True) -> Optional[str]:
     Args:
         bvid: BV 号
         prefer_human: 是否优先选择人工字幕
+        prefer_language: 优先语言前缀，如 "zh"
+        cid: 指定分P的 cid，为 None 时使用视频默认 cid
 
     Returns:
         Optional[str]: SRT 格式字幕文本，无字幕时返回 None
     """
-    # 获取视频信息（需要 cid）
+    # 获取视频信息（需要 aid 和 cid）
     video_info = get_video_info(bvid)
+    aid = video_info.aid
+    use_cid = cid if cid is not None else video_info.cid
 
     # 获取字幕元数据
-    metas = get_subtitle_metas(video_info.aid, video_info.cid)
+    metas = get_subtitle_metas(aid, use_cid)
 
     if not metas:
         return None
 
-    # 选择字幕：优先人工字幕
-    selected = None
+    # 选择字幕：先按 prefer_human 筛选，再按 prefer_language 前缀匹配
+    candidates = metas
     if prefer_human:
-        selected = next((m for m in metas if not m.is_ai), None)
+        human_metas = [m for m in metas if not m.is_ai]
+        if human_metas:
+            candidates = human_metas
+
+    selected = next(
+        (m for m in candidates if m.language.startswith(prefer_language)),
+        None,
+    )
     if selected is None:
-        selected = metas[0]
+        selected = candidates[0]
 
     # 获取字幕内容
-    lines = get_subtitle_content(selected)
+    lines = get_subtitle_content(selected, cookies=cookies)
 
     if not lines:
         return None

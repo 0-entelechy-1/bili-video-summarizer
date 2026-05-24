@@ -10,6 +10,7 @@ from typing import Any, Dict
 from bili_analyzer.analyzer.base import (
     BaseAnalyzer,
     build_analysis_prompt,
+    build_format_transcript_prompt,
     parse_llm_response,
     validate_analysis_result,
 )
@@ -51,6 +52,16 @@ class ZhipuAnalyzer(BaseAnalyzer):
 
         return result
 
+    def format_transcript(self, srt_content: str) -> str:
+        prompt = build_format_transcript_prompt(srt_content)
+
+        try:
+            response_text = self._call_with_zhipuai_sdk(prompt)
+        except ImportError:
+            response_text = self._call_with_openai_sdk(prompt)
+
+        return response_text
+
     def _call_with_zhipuai_sdk(self, prompt: str) -> str:
         """使用 zhipuai SDK 调用"""
         from zhipuai import ZhipuAI
@@ -76,9 +87,13 @@ class ZhipuAnalyzer(BaseAnalyzer):
             ],
             temperature=0.3,
             max_tokens=8192,
+            response_format={"type": "json_object"},
         )
 
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        if not content or not content.strip():
+            raise RuntimeError("智谱 API 返回空内容")
+        return content
 
     def _call_with_openai_sdk(self, prompt: str) -> str:
         """使用 OpenAI SDK 调用智谱 API（兼容模式）"""
@@ -108,6 +123,10 @@ class ZhipuAnalyzer(BaseAnalyzer):
             ],
             temperature=0.3,
             max_tokens=8192,
+            response_format={"type": "json_object"},
         )
 
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        if not content or not content.strip():
+            raise RuntimeError("智谱 API 返回空内容")
+        return content

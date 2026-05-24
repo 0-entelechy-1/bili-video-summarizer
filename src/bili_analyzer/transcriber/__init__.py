@@ -11,7 +11,7 @@ from bili_analyzer.transcriber.base import BaseTranscriber
 from bili_analyzer.transcriber.cc_subtitle import CCSubtitleTranscriber
 
 
-def create_transcriber(config: AppConfig, bvid: str) -> BaseTranscriber:
+def create_transcriber(config: AppConfig, bvid: str, prefer_language: str = "zh") -> BaseTranscriber:
     prefer = config.transcriber.prefer
 
     if prefer == "whisper":
@@ -29,18 +29,18 @@ def create_transcriber(config: AppConfig, bvid: str) -> BaseTranscriber:
         )
 
     if prefer == "auto":
-        return CCSubtitleTranscriber(bvid=bvid)
+        return CCSubtitleTranscriber(bvid=bvid, prefer_language=prefer_language)
 
-    return CCSubtitleTranscriber(bvid=bvid)
+    return CCSubtitleTranscriber(bvid=bvid, prefer_language=prefer_language)
 
 
 def get_transcriber_chain(config: AppConfig, bvid: str) -> list:
     chain = []
 
-    cc = CCSubtitleTranscriber(bvid=bvid)
-    chain.append(cc)
-
     prefer = config.transcriber.prefer
+
+    # CC 字幕不需要额外配置，始终作为保底选项加入链中
+    chain.append(CCSubtitleTranscriber(bvid=bvid, prefer_language="zh"))
 
     if prefer in ("auto", "volcengine"):
         if config.transcriber.volcengine.token and config.transcriber.volcengine.appid:

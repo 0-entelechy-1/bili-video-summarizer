@@ -54,6 +54,7 @@ class TranscriberConfig:
 @dataclass
 class CleanupConfig:
     auto_delete_video: bool = True
+    auto_delete_audio: bool = True
 
 
 @dataclass
@@ -68,16 +69,23 @@ class ScreenshotConfig:
 
 
 @dataclass
+class BilibiliConfig:
+    cookie: str = ""
+
+
+@dataclass
 class AppConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     transcriber: TranscriberConfig = field(default_factory=TranscriberConfig)
     cleanup: CleanupConfig = field(default_factory=CleanupConfig)
     download: DownloadConfig = field(default_factory=DownloadConfig)
     screenshot: ScreenshotConfig = field(default_factory=ScreenshotConfig)
+    bilibili: BilibiliConfig = field(default_factory=BilibiliConfig)
     # 运行时参数（不由配置文件设置）
     output_dir: str = "./outputs"
     video_url: str = ""
     keep_video: bool = False
+    page: Optional[str] = None
 
 
 def _find_config_file() -> Optional[Path]:
@@ -116,6 +124,8 @@ def _apply_env_overrides(config: AppConfig) -> AppConfig:
         config.transcriber.volcengine.token = os.environ["BYTEDANCE_VC_TOKEN"]
     if os.getenv("BYTEDANCE_VC_APPID"):
         config.transcriber.volcengine.appid = os.environ["BYTEDANCE_VC_APPID"]
+    if os.getenv("BILIBILI_COOKIE"):
+        config.bilibili.cookie = os.environ["BILIBILI_COOKIE"]
     return config
 
 
@@ -154,6 +164,7 @@ def _dict_to_config(data: dict) -> AppConfig:
     cleanup_data = data.get("cleanup", {})
     if cleanup_data:
         config.cleanup.auto_delete_video = cleanup_data.get("auto_delete_video", config.cleanup.auto_delete_video)
+        config.cleanup.auto_delete_audio = cleanup_data.get("auto_delete_audio", config.cleanup.auto_delete_audio)
 
     # 下载配置
     download_data = data.get("download", {})
@@ -165,6 +176,10 @@ def _dict_to_config(data: dict) -> AppConfig:
     if screenshot_data:
         config.screenshot.count = screenshot_data.get("count", config.screenshot.count)
         config.screenshot.quality = screenshot_data.get("quality", config.screenshot.quality)
+
+    bilibili_data = data.get("bilibili", {})
+    if bilibili_data:
+        config.bilibili.cookie = bilibili_data.get("cookie", config.bilibili.cookie)
 
     return config
 
@@ -211,4 +226,8 @@ def apply_cli_overrides(config: AppConfig, **kwargs) -> AppConfig:
         config.llm.provider = kwargs["llm_provider"]
     if kwargs.get("keep_video"):
         config.keep_video = True
+    if kwargs.get("page") is not None:
+        config.page = kwargs["page"]
+    if kwargs.get("cookie"):
+        config.bilibili.cookie = kwargs["cookie"]
     return config

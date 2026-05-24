@@ -8,18 +8,30 @@ version = "1.0.0"
 description = "B站视频分析器 - 自动提取知识点并生成学习笔记"
 requires-python = ">=3.9"
 dependencies = [
+    # 配置解析
     "pyyaml>=6.0",
+    # HTTP 请求（B站 API、字幕下载、火山引擎）
     "requests>=2.28.0",
+    # 视频下载
     "yt-dlp>=2024.0.0",
+    # 进度条（截图批量处理）
     "tqdm>=4.60.0",
+    # 扫码登录二维码终端显示
+    "qrcode>=7.0",
 ]
 
 [project.optional-dependencies]
+# 智谱 GLM API（LLM 分析）
 zhipu = ["zhipuai>=2.0.0"]
+# DeepSeek API（LLM 分析）
 deepseek = ["openai>=1.0.0"]
+# 本地 Whisper 语音识别
 whisper = ["openai-whisper>=20231117"]
+# 火山引擎语音识别（仅依赖 requests，已在核心依赖中）
 volcengine = []
+# 安装所有可选功能
 all = ["zhipuai>=2.0.0", "openai>=1.0.0", "openai-whisper>=20231117"]
+# 开发工具
 dev = ["pytest>=7.0", "ruff>=0.1.0"]
 
 [project.scripts]

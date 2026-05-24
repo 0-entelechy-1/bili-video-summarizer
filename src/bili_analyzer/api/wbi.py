@@ -36,11 +36,38 @@ def _fetch_wbi_keys() -> tuple:
     Returns:
         tuple: (img_url, sub_url)
     """
-    resp = requests.get("https://api.bilibili.com/x/web-interface/nav", timeout=10)
-    data = resp.json().get("data", {})
-    img_url = data.get("wbi_img", {}).get("img_url", "")
-    sub_url = data.get("wbi_img", {}).get("sub_url", "")
-    return img_url, sub_url
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            from bili_analyzer.api.bilibili import _get_session
+            session = _get_session()
+            resp = session.get("https://api.bilibili.com/x/web-interface/nav", timeout=10)
+            if resp.status_code != 200:
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise RuntimeError(f"获取 Wbi 密钥失败: HTTP {resp.status_code}")
+            content_type = resp.headers.get("Content-Type", "")
+            if "json" not in content_type and "javascript" not in content_type:
+                raise RuntimeError(f"获取 Wbi 密钥失败: 响应不是 JSON (HTTP {resp.status_code}, Content-Type={content_type})")
+            try:
+                data = resp.json()
+            except Exception as e:
+                raise RuntimeError(f"获取 Wbi 密钥失败: JSON 解析错误 ({e})") from e
+            data_obj = data.get("data", {})
+            img_url = data_obj.get("wbi_img", {}).get("img_url", "")
+            sub_url = data_obj.get("wbi_img", {}).get("sub_url", "")
+            return img_url, sub_url
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            raise RuntimeError("获取 Wbi 密钥失败: 请求超时")
+        except requests.exceptions.ConnectionError:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            raise RuntimeError("获取 Wbi 密钥失败: 连接错误")
 
 
 def get_mixin_key() -> str:

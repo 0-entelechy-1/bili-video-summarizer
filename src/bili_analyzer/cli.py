@@ -26,7 +26,9 @@ def create_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "video_url",
-        help="B站视频链接或BV号"
+        nargs="?",
+        default=None,
+        help="B站视频链接或BV号 (使用 --login 时不需要)"
     )
 
     parser.add_argument(
@@ -52,6 +54,27 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--page",
+        dest="page",
+        default=None,
+        help="选择要分析的分P: 数字(如2)、all(全部)、不提供则交互式选择"
+    )
+
+    parser.add_argument(
+        "--cookie",
+        dest="cookie",
+        default=None,
+        help="B站 Cookie (如 SESSDATA=xxx; bili_jct=yyy)"
+    )
+
+    parser.add_argument(
+        "--login",
+        action="store_true",
+        default=False,
+        help="扫码登录 B站并保存凭证"
+    )
+
+    parser.add_argument(
         "--config", "-c",
         dest="config_path",
         default=None,
@@ -72,6 +95,18 @@ def main():
     parser = create_parser()
     args = parser.parse_args()
 
+    # 扫码登录模式
+    if args.login:
+        from bili_analyzer.api.auth import perform_login
+        perform_login()
+        sys.exit(0)
+
+    # 检查 video_url 是否提供
+    if not args.video_url:
+        parser.print_help()
+        print("\n错误: 必须提供视频链接或BV号")
+        sys.exit(1)
+
     # 加载配置
     try:
         config = load_config(args.config_path)
@@ -86,6 +121,8 @@ def main():
         output_dir=args.output_dir,
         llm_provider=args.llm_provider,
         keep_video=args.keep_video,
+        page=args.page,
+        cookie=args.cookie,
     )
 
     # 初始化日志（一次运行生成一份日志）

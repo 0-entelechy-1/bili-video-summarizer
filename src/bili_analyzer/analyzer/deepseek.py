@@ -5,6 +5,7 @@ from typing import Any, Dict
 from bili_analyzer.analyzer.base import (
     BaseAnalyzer,
     build_analysis_prompt,
+    build_format_transcript_prompt,
     parse_llm_response,
     validate_analysis_result,
 )
@@ -62,3 +63,31 @@ class DeepseekAnalyzer(BaseAnalyzer):
         print(f"  关键截图: {len(result.get('key_screenshots', []))} 个")
 
         return result
+
+    def format_transcript(self, srt_content: str) -> str:
+        from openai import OpenAI
+
+        prompt = build_format_transcript_prompt(srt_content)
+
+        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+
+        print("正在调用 LLM 进行字幕分段排版...")
+
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你是一位专业的文字排版专家。"
+                        "请按照要求的格式对字幕进行语义分段排版,"
+                        "直接输出排版后的纯文本,不要包含任何解释或额外标记。"
+                    )
+                },
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+            max_tokens=8192,
+        )
+
+        return response.choices[0].message.content

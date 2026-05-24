@@ -5,14 +5,17 @@
 """
 
 import sys
+import re
 from typing import Any, Dict
 
 from bili_analyzer.analyzer.base import (
     BaseAnalyzer,
     build_analysis_prompt,
+    build_format_transcript_prompt,
     parse_llm_response,
     validate_analysis_result,
 )
+from bili_analyzer.parser.srt import parse_srt_file, get_full_transcript
 
 
 class InteractiveAnalyzer(BaseAnalyzer):
@@ -35,7 +38,7 @@ class InteractiveAnalyzer(BaseAnalyzer):
         print("等待 LLM 响应")
         print("=" * 70)
         print("\n请将 LLM 返回的 JSON 结果粘贴到下方，然后:")
-        print("  - Windows: 按 Ctrl+Z 然后回车")
+        print("  - Windows: 按 回车然后 Ctrl+Z 最后再回车")
         print("  - macOS/Linux: 按 Ctrl+D")
         print("\n开始输入:")
         print("-" * 70)
@@ -59,3 +62,17 @@ class InteractiveAnalyzer(BaseAnalyzer):
 
         print("分析结果验证通过")
         return result
+
+    def format_transcript(self, srt_content: str) -> str:
+        lines = srt_content.strip().split('\n')
+        text_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.isdigit():
+                continue
+            if re.match(r'[\d:,]+\s*-->\s*[\d:,]+', stripped):
+                continue
+            text_lines.append(stripped)
+        return '　　' + ''.join(text_lines)

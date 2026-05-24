@@ -12,6 +12,8 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 def _thread_excepthook(args):
     if args.exc_type is SystemExit:
@@ -30,8 +32,11 @@ def _sys_excepthook(exc_type, exc_value, exc_tb):
     logger.error(f"未捕获异常:\n{tb_text}")
 
 
-def setup_logger(log_dir: str = "./logs") -> logging.Logger:
-    log_path = Path(log_dir).resolve()
+def setup_logger(log_dir: str = "") -> logging.Logger:
+    if log_dir:
+        log_path = Path(log_dir).resolve()
+    else:
+        log_path = _PROJECT_ROOT / "logs"
     log_path.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
