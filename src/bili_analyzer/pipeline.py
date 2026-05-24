@@ -581,6 +581,7 @@ def run_pipeline(config: AppConfig, timestamp: str = "") -> None:
         output_dir = Path(config.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"输出目录: {output_dir.resolve()}")
+        print(f"输出目录: {output_dir.resolve()}")
 
         reports_dir = output_dir / "reports"
         reports_dir.mkdir(parents=True, exist_ok=True)

@@ -36,7 +36,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--output", "-o",
         dest="output_dir",
         default=None,
-        help="输出目录 (默认: ./outputs)"
+        help="输出目录 (默认: 项目根目录下的 outputs 文件夹)"
     )
 
     parser.add_argument(

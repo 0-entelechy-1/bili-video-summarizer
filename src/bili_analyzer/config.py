@@ -82,7 +82,7 @@ class AppConfig:
     screenshot: ScreenshotConfig = field(default_factory=ScreenshotConfig)
     bilibili: BilibiliConfig = field(default_factory=BilibiliConfig)
     # 运行时参数（不由配置文件设置）
-    output_dir: str = "./outputs"
+    output_dir: str = ""
     video_url: str = ""
     keep_video: bool = False
     page: Optional[str] = None
@@ -217,6 +217,10 @@ def apply_cli_overrides(config: AppConfig, **kwargs) -> AppConfig:
     """
     if kwargs.get("output_dir"):
         config.output_dir = kwargs["output_dir"]
+    else:
+        # 未指定时，固定使用项目根目录下的 outputs 文件夹
+        from pathlib import Path
+        config.output_dir = str(Path(__file__).resolve().parent.parent.parent / "outputs")
     if kwargs.get("video_url"):
         config.video_url = kwargs["video_url"]
     if kwargs.get("llm_provider"):
