@@ -235,6 +235,8 @@ def get_subtitle_metas(aid: int, cid: int) -> List[SubtitleMeta]:
     result = []
     for sub in subtitles:
         url = sub.get("subtitle_url", "")
+        if not url:
+            continue
         if url.startswith("//"):
             url = "https:" + url
 
@@ -259,6 +261,10 @@ def get_subtitle_content(meta: SubtitleMeta, cookies: Optional[Dict[str, str]] =
     Returns:
         List[SubtitleLine]: 字幕行列表
     """
+    if not meta.url:
+        logger.warning("字幕元数据 URL 为空，跳过获取")
+        return []
+
     session = _get_session()
 
     # 如果有 Cookie，设置到 session

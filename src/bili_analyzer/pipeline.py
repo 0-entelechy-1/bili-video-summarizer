@@ -382,7 +382,7 @@ def _analyze_single_page(
         logger.info("未检测到CC字幕，使用语音识别")
 
         from bili_analyzer.transcriber import get_transcriber_chain
-        transcriber_chain = get_transcriber_chain(config, bvid)
+        transcriber_chain = get_transcriber_chain(config, bvid, cid=page_info.cid)
 
         if not transcriber_chain:
             raise RuntimeError(
@@ -495,8 +495,8 @@ def _analyze_single_page(
     transcript_text = ""
     if success_analyzer:
         try:
-            print("正在对字幕原文进行语义分段排版...")
-            logger.info("开始字幕原文语义分段排版")
+            print(f"使用 {success_analyzer.name} 进行字幕排版...")
+            logger.info(f"使用 {success_analyzer.name} 进行字幕排版")
             transcript_text = success_analyzer.format_transcript(srt_content)
             logger.info("字幕原文语义分段排版完成")
         except Exception as e:

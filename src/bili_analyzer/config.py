@@ -22,7 +22,7 @@ class ZhipuConfig:
 class DeepseekConfig:
     api_key: str = ""
     base_url: str = "https://api.deepseek.com"
-    model: str = "deepseek-chat"
+    model: str = "deepseek-v4-flash"
 
 
 @dataclass
@@ -89,15 +89,10 @@ class AppConfig:
 
 
 def _find_config_file() -> Optional[Path]:
-    """搜索配置文件，优先级：当前目录 > 项目根目录 > 包目录"""
-    search_paths = [
-        Path.cwd() / "config.yaml",
-        Path.cwd() / "bili_analyzer" / "config.yaml",
-        Path(__file__).parent.parent.parent / "config.yaml",
-    ]
-    for path in search_paths:
-        if path.exists():
-            return path
+    """返回项目根目录下的配置文件路径"""
+    path = Path(__file__).parent.parent.parent / "config.yaml"
+    if path.exists():
+        return path
     return None
 
 
@@ -202,9 +197,11 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         yaml_path = _find_config_file()
 
     if yaml_path:
+        print(f"加载配置文件: {yaml_path.resolve()}")
         data = _load_yaml_config(yaml_path)
         config = _dict_to_config(data)
     else:
+        print("警告: 未找到配置文件，使用默认配置")
         config = AppConfig()
 
     # 2. 环境变量覆盖

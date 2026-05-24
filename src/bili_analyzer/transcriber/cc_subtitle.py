@@ -58,7 +58,7 @@ class CCSubtitleTranscriber(BaseTranscriber):
         Raises:
             RuntimeError: 无 CC 字幕
         """
-        if self._cached_srt is not None:
+        if self._cached_srt is not None and self._cached_cid == self.cid:
             srt_content = self._cached_srt
         else:
             srt_content = fetch_cc_subtitle(
@@ -91,7 +91,7 @@ class CCSubtitleTranscriber(BaseTranscriber):
         Returns:
             bool: 有字幕返回 True
         """
-        if self._cached_srt is not None:
+        if self._cached_srt is not None and self._cached_cid == self.cid:
             return True
 
         try:

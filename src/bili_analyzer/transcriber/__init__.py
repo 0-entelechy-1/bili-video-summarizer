@@ -34,13 +34,13 @@ def create_transcriber(config: AppConfig, bvid: str, prefer_language: str = "zh"
     return CCSubtitleTranscriber(bvid=bvid, prefer_language=prefer_language)
 
 
-def get_transcriber_chain(config: AppConfig, bvid: str) -> list:
+def get_transcriber_chain(config: AppConfig, bvid: str, cid: Optional[int] = None) -> list:
     chain = []
 
     prefer = config.transcriber.prefer
 
     # CC 字幕不需要额外配置，始终作为保底选项加入链中
-    chain.append(CCSubtitleTranscriber(bvid=bvid, prefer_language="zh"))
+    chain.append(CCSubtitleTranscriber(bvid=bvid, prefer_language="zh", cid=cid))
 
     if prefer in ("auto", "volcengine"):
         if config.transcriber.volcengine.token and config.transcriber.volcengine.appid:
