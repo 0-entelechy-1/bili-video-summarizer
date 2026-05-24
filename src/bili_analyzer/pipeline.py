@@ -275,6 +275,7 @@ def _analyze_single_page(
     cookies: Optional[Dict[str, str]] = None,
     total_pages: int = 1,
     safe_video_title: str = "",
+    timestamp: str = "",
 ) -> Dict[str, Any]:
     """分析单个分P
 
@@ -288,6 +289,7 @@ def _analyze_single_page(
         step_offset: 步骤编号偏移量
         total_pages: 总分P数（用于判断单P/多P）
         safe_video_title: 处理后的视频标题（用于构建目录）
+        timestamp: 统一时间戳
 
     Returns:
         Dict: 包含 report_path, screenshots_dir, srt_path 等结果信息
@@ -297,7 +299,8 @@ def _analyze_single_page(
     result = {}
 
     # 构建输出目录和文件名，附加时间戳避免目录复用导致断点续传冲突
-    timestamp = datetime.now().strftime("%m%d_%H%M%S")
+    if not timestamp:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     if not safe_video_title:
         safe_video_title = _safe_dirname(video_info.title)
     safe_page_title = _safe_dirname(page_info.title)
@@ -513,6 +516,7 @@ def _analyze_single_page(
         srt_content=srt_content,
         output_dir=reports_dir,
         transcript_text=transcript_text,
+        timestamp=timestamp,
     )
 
     step_elapsed = time.time() - step_start
@@ -544,7 +548,7 @@ def _analyze_single_page(
     return result
 
 
-def run_pipeline(config: AppConfig) -> None:
+def run_pipeline(config: AppConfig, timestamp: str = "") -> None:
     total_steps = 7
     video_path = None
 
@@ -619,6 +623,7 @@ def run_pipeline(config: AppConfig) -> None:
                     cookies=current_cookies,
                     total_pages=len(pages),
                     safe_video_title=safe_video_title,
+                    timestamp=timestamp,
                 )
                 all_results.append(result)
             except Exception as e:

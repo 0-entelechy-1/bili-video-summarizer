@@ -32,14 +32,15 @@ def _sys_excepthook(exc_type, exc_value, exc_tb):
     logger.error(f"未捕获异常:\n{tb_text}")
 
 
-def setup_logger(log_dir: str = "") -> logging.Logger:
+def setup_logger(log_dir: str = "", timestamp: str = "") -> logging.Logger:
     if log_dir:
         log_path = Path(log_dir).resolve()
     else:
         log_path = _PROJECT_ROOT / "logs"
     log_path.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if not timestamp:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = log_path / f"bili_analyzer_{timestamp}.log"
 
     logger = logging.getLogger("bili_analyzer")

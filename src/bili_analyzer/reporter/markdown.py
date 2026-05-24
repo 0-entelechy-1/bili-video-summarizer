@@ -30,6 +30,7 @@ def generate_markdown(
     srt_content: str,
     output_dir: Path,
     transcript_text: str = "",
+    timestamp: str = "",
 ) -> Path:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -39,7 +40,13 @@ def generate_markdown(
         c for c in title if c.isalnum() or c in (' ', '-', '_', '(', ')', '，', '。', '"', '"')
     ).strip()[:50]
 
-    report_filename = f"{safe_title}_学习笔记.md"
+    if timestamp:
+        report_filename = f"{safe_title}_{timestamp}_学习笔记.md"
+        report_time = datetime.strptime(timestamp, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M")
+    else:
+        report_filename = f"{safe_title}_学习笔记.md"
+        report_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+
     report_path = output_dir / report_filename
 
     lines = []
@@ -163,7 +170,7 @@ def generate_markdown(
 
     lines.append("---")
     lines.append("")
-    lines.append(f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    lines.append(f"**生成时间**: {report_time}")
     lines.append("")
 
     content = '\n'.join(lines)

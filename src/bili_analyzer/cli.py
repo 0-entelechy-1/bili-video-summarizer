@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+from datetime import datetime
 
 from bili_analyzer.config import load_config, apply_cli_overrides
 from bili_analyzer.logger import setup_logger
@@ -125,12 +126,15 @@ def main():
         cookie=args.cookie,
     )
 
-    # 初始化日志（一次运行生成一份日志）
-    setup_logger()
+    # 生成统一的时间戳
+    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # 执行分析流程
+    # 初始化日志（传入时间戳）
+    setup_logger(timestamp=run_timestamp)
+
+    # 执行分析流程（传入时间戳）
     try:
-        run_pipeline(config)
+        run_pipeline(config, timestamp=run_timestamp)
     except KeyboardInterrupt:
         print("\n\n用户中断")
         sys.exit(1)
