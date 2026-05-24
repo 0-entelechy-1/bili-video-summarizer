@@ -55,6 +55,14 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--quality", "-q",
+        dest="quality",
+        choices=["1080p", "720p", "480p", "best"],
+        default=None,
+        help="视频下载清晰度 (默认: 使用配置文件设置)"
+    )
+
+    parser.add_argument(
         "--page",
         dest="page",
         default=None,
@@ -122,6 +130,7 @@ def main():
         output_dir=args.output_dir,
         llm_provider=args.llm_provider,
         keep_video=args.keep_video,
+        quality=args.quality,
         page=args.page,
         cookie=args.cookie,
     )

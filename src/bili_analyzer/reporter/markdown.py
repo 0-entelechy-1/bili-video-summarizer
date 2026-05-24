@@ -115,10 +115,11 @@ def generate_markdown(
 
         if closest_screenshot:
             try:
-                rel_path = os.path.relpath(str(closest_screenshot), str(report_path.parent))
+                rel_path = os.path.relpath(str(closest_screenshot), str(report_path.parent)).replace("\\", "/")
                 lines.append(f'<img src="{rel_path}" width="600" alt="知识点配图"/>')
             except ValueError:
-                lines.append(f'<img src="{closest_screenshot}" width="600" alt="知识点配图"/>')
+                abs_path = str(closest_screenshot).replace("\\", "/")
+                lines.append(f'<img src="{abs_path}" width="600" alt="知识点配图"/>')
             lines.append("")
             lines.append("")
 

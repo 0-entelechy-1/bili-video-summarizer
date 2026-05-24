@@ -6,6 +6,7 @@
 - 批量并发截图
 """
 
+import logging
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,6 +14,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from tqdm import tqdm
+
+logger = logging.getLogger("bili_analyzer")
 
 
 def check_ffmpeg() -> bool:
@@ -155,12 +158,21 @@ def batch_capture(
         for future in as_completed(future_to_task):
             task = future_to_task[future]
             try:
-                if future.result():
+                success = future.result()
+                if success:
                     screenshot_mapping[task['timestamp']] = task['output_path']
                 else:
                     failed_count += 1
-            except Exception:
+                    logger.warning(
+                        "截图失败: timestamp=%.2fs, video=%s, output=%s",
+                        task['timestamp'], video_path, task['output_path']
+                    )
+            except Exception as e:
                 failed_count += 1
+                logger.warning(
+                    "截图异常: timestamp=%.2fs, video=%s, output=%s, error=%s",
+                    task['timestamp'], video_path, task['output_path'], e
+                )
 
             if pbar:
                 pbar.update(1)
@@ -168,7 +180,9 @@ def batch_capture(
     if pbar:
         pbar.close()
 
-    print(f"\n截图完成: 成功 {len(screenshot_mapping)} 张"
-          + (f"，失败 {failed_count} 张" if failed_count > 0 else ""))
+    summary = f"截图完成: 成功 {len(screenshot_mapping)} 张" \
+              + (f"，失败 {failed_count} 张" if failed_count > 0 else "")
+    print(f"\n{summary}")
+    logger.info(summary)
 
     return screenshot_mapping

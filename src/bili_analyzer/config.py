@@ -227,6 +227,8 @@ def apply_cli_overrides(config: AppConfig, **kwargs) -> AppConfig:
         config.llm.provider = kwargs["llm_provider"]
     if kwargs.get("keep_video"):
         config.keep_video = True
+    if kwargs.get("quality"):
+        config.download.quality = kwargs["quality"]
     if kwargs.get("page") is not None:
         config.page = kwargs["page"]
     if kwargs.get("cookie"):

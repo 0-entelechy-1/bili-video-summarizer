@@ -38,10 +38,10 @@ class ZhipuAnalyzer(BaseAnalyzer):
 
         # 优先尝试 zhipuai SDK
         try:
-            response_text = self._call_with_zhipuai_sdk(prompt)
+            response_text = self._call_with_zhipuai_sdk(prompt, force_json=True)
         except ImportError:
             # 降级为 OpenAI SDK
-            response_text = self._call_with_openai_sdk(prompt)
+            response_text = self._call_with_openai_sdk(prompt, force_json=True)
 
         result = parse_llm_response(response_text)
         validate_analysis_result(result)
@@ -56,13 +56,13 @@ class ZhipuAnalyzer(BaseAnalyzer):
         prompt = build_format_transcript_prompt(srt_content)
 
         try:
-            response_text = self._call_with_zhipuai_sdk(prompt)
+            response_text = self._call_with_zhipuai_sdk(prompt, force_json=False)
         except ImportError:
-            response_text = self._call_with_openai_sdk(prompt)
+            response_text = self._call_with_openai_sdk(prompt, force_json=False)
 
         return response_text
 
-    def _call_with_zhipuai_sdk(self, prompt: str) -> str:
+    def _call_with_zhipuai_sdk(self, prompt: str, force_json: bool = True) -> str:
         """使用 zhipuai SDK 调用"""
         from zhipuai import ZhipuAI
 
@@ -71,9 +71,9 @@ class ZhipuAnalyzer(BaseAnalyzer):
         print(f"正在调用智谱 API (模型: {self.model})...")
         print("  这可能需要30-120秒，请耐心等待...")
 
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=[
+        kwargs = {
+            "model": self.model,
+            "messages": [
                 {
                     "role": "system",
                     "content": (
@@ -85,17 +85,20 @@ class ZhipuAnalyzer(BaseAnalyzer):
                 },
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.3,
-            max_tokens=8192,
-            response_format={"type": "json_object"},
-        )
+            "temperature": 0.3,
+            "max_tokens": 8192,
+        }
+        if force_json:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = client.chat.completions.create(**kwargs)
 
         content = response.choices[0].message.content
         if not content or not content.strip():
             raise RuntimeError("智谱 API 返回空内容")
         return content
 
-    def _call_with_openai_sdk(self, prompt: str) -> str:
+    def _call_with_openai_sdk(self, prompt: str, force_json: bool = True) -> str:
         """使用 OpenAI SDK 调用智谱 API（兼容模式）"""
         from openai import OpenAI
 
@@ -107,9 +110,9 @@ class ZhipuAnalyzer(BaseAnalyzer):
         print(f"正在调用智谱 API (模型: {self.model}, OpenAI兼容模式)...")
         print("  这可能需要30-120秒，请耐心等待...")
 
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=[
+        kwargs = {
+            "model": self.model,
+            "messages": [
                 {
                     "role": "system",
                     "content": (
@@ -121,10 +124,13 @@ class ZhipuAnalyzer(BaseAnalyzer):
                 },
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.3,
-            max_tokens=8192,
-            response_format={"type": "json_object"},
-        )
+            "temperature": 0.3,
+            "max_tokens": 8192,
+        }
+        if force_json:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = client.chat.completions.create(**kwargs)
 
         content = response.choices[0].message.content
         if not content or not content.strip():
