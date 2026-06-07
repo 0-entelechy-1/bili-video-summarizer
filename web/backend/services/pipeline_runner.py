@@ -30,9 +30,10 @@ logger = logging.getLogger(__name__)
 class PipelineProgressHandler(logging.Handler):
     """自定义日志处理器，将日志转为 WebSocket 消息"""
 
-    def __init__(self, task_id: str):
+    def __init__(self, task_id: str, loop: asyncio.AbstractEventLoop):
         super().__init__()
         self.task_id = task_id
+        self.loop = loop
         self.step_names = {
             1: "获取视频信息",
             2: "下载视频",
@@ -69,8 +70,11 @@ class PipelineProgressHandler(logging.Handler):
                 message["step"] = step
                 message["step_name"] = step_name
 
-            # 使用 asyncio 在事件循环中发送
-            asyncio.create_task(manager.broadcast_to_task(self.task_id, message))
+            # 使用 run_coroutine_threadsafe 在主线程事件循环中发送
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast_to_task(self.task_id, message),
+                self.loop
+            )
         except Exception:
             pass
 
@@ -78,8 +82,9 @@ class PipelineProgressHandler(logging.Handler):
 class PrintCapture:
     """捕获 print 输出并转为 WebSocket 消息"""
 
-    def __init__(self, task_id: str):
+    def __init__(self, task_id: str, loop: asyncio.AbstractEventLoop):
         self.task_id = task_id
+        self.loop = loop
         self.buffer = ""
         self.step_names = {
             1: "获取视频信息",
@@ -132,7 +137,10 @@ class PrintCapture:
             message["step"] = step
             message["step_name"] = step_name
 
-        asyncio.create_task(manager.broadcast_to_task(self.task_id, message))
+        asyncio.run_coroutine_threadsafe(
+            manager.broadcast_to_task(self.task_id, message),
+            self.loop
+        )
 
     def flush(self):
         if self.buffer.strip():
@@ -147,6 +155,7 @@ def _run_pipeline_sync(
     quality: Optional[str],
     keep_video: bool,
     pages: Optional[str],
+    loop: asyncio.AbstractEventLoop,
 ):
     """同步运行 pipeline（在后台线程中执行）"""
     db = SessionLocal()
@@ -155,7 +164,7 @@ def _run_pipeline_sync(
         task_service.update_task_status(db, task_id, status="running")
 
         # 设置日志捕获
-        log_handler = PipelineProgressHandler(task_id)
+        log_handler = PipelineProgressHandler(task_id, loop)
         log_handler.setLevel(logging.INFO)
         formatter = logging.Formatter("%(message)s")
         log_handler.setFormatter(formatter)
@@ -174,7 +183,7 @@ def _run_pipeline_sync(
         )
 
         # 捕获 print 输出
-        print_capture = PrintCapture(task_id)
+        print_capture = PrintCapture(task_id, loop)
         old_stdout = sys.stdout
         old_stderr = sys.stderr
         sys.stdout = print_capture
@@ -215,23 +224,16 @@ def _run_pipeline_sync(
 
             # 发送完成消息
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(manager.broadcast_to_task(task_id, {
+                asyncio.run_coroutine_threadsafe(
+                    manager.broadcast_to_task(task_id, {
                         "type": "task_complete",
                         "result": {
                             "report_path": report_path,
                             "output_dir": str(output_dir),
                         },
-                    }))
-                else:
-                    asyncio.run(manager.broadcast_to_task(task_id, {
-                        "type": "task_complete",
-                        "result": {
-                            "report_path": report_path,
-                            "output_dir": str(output_dir),
-                        },
-                    }))
+                    }),
+                    loop
+                )
             except Exception:
                 pass
 
@@ -244,17 +246,13 @@ def _run_pipeline_sync(
                 error_message=error_msg,
             )
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(manager.broadcast_to_task(task_id, {
+                asyncio.run_coroutine_threadsafe(
+                    manager.broadcast_to_task(task_id, {
                         "type": "task_failed",
                         "error": error_msg,
-                    }))
-                else:
-                    asyncio.run(manager.broadcast_to_task(task_id, {
-                        "type": "task_failed",
-                        "error": error_msg,
-                    }))
+                    }),
+                    loop
+                )
             except Exception:
                 pass
         finally:
@@ -286,4 +284,5 @@ async def run_pipeline_async(
         quality,
         keep_video,
         pages,
+        loop,
     )
