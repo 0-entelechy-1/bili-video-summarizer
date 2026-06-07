@@ -20,3 +20,5 @@ config.yaml
 *.mp3
 *.wav
 *.srt
+
+data/

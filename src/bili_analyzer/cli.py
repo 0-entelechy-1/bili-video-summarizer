@@ -63,6 +63,14 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--model", "-m",
+        dest="whisper_model",
+        choices=["tiny", "base", "small", "medium"],
+        default=None,
+        help="Whisper 语音识别模型: tiny/base/small/medium (默认: medium)"
+    )
+
+    parser.add_argument(
         "--page",
         dest="page",
         default=None,
@@ -133,6 +141,7 @@ def main():
         quality=args.quality,
         page=args.page,
         cookie=args.cookie,
+        whisper_model=args.whisper_model,
     )
 
     # 生成统一的时间戳

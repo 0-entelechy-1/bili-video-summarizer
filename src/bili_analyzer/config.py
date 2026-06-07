@@ -233,4 +233,6 @@ def apply_cli_overrides(config: AppConfig, **kwargs) -> AppConfig:
         config.page = kwargs["page"]
     if kwargs.get("cookie"):
         config.bilibili.cookie = kwargs["cookie"]
+    if kwargs.get("whisper_model"):
+        config.transcriber.whisper.model = kwargs["whisper_model"]
     return config
