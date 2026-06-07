@@ -19,16 +19,19 @@ class YtdlpSubtitleTranscriber(BaseTranscriber):
         video_url: str,
         sub_langs: str = "zh-CN,zh-Hans,zh-TW,ai-zh",
         cookies: Optional[dict] = None,
+        cookies_file: Optional[str] = None,
     ):
         """
         Args:
             video_url: 视频 URL（含 ?p=N 分P参数）
             sub_langs: 字幕语言列表，逗号分隔（中文人工优先，AI 兜底）
-            cookies: B站 Cookie 字典
+            cookies: B站 Cookie 字典（QR 登录获取的 4 项）
+            cookies_file: 浏览器导出的 cookies.txt 路径（优先级高于 cookies）
         """
         self.video_url = video_url
         self.sub_langs = sub_langs
         self.cookies = cookies
+        self.cookies_file = cookies_file
 
     @property
     def name(self) -> str:
@@ -52,6 +55,7 @@ class YtdlpSubtitleTranscriber(BaseTranscriber):
             output_dir=output_dir,
             sub_langs=self.sub_langs,
             cookies=self.cookies,
+            cookies_file=self.cookies_file,
             output_name=video_path.stem,
         )
         if srt_path is None:

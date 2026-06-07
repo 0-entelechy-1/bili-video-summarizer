@@ -383,6 +383,7 @@ def _analyze_single_page(
         video_url=page_video_url,
         sub_langs=ytdlp_sub_langs,
         cookies=cookies,
+        cookies_file=config.transcriber.cookies_file,
     )
 
     try:
@@ -465,7 +466,6 @@ def _analyze_single_page(
         raise RuntimeError("所有分析方式均失败") from last_error
 
     analysis_json_path = video_dir / f"{video_path.stem}_analysis.json"
-    from bili_analyzer.analyzer.base import BaseAnalyzer
     for analyzer in analyzer_chain:
         try:
             analyzer.save_analysis(analysis_result, analysis_json_path)
@@ -563,7 +563,6 @@ def _analyze_single_page(
 
 def run_pipeline(config: AppConfig, timestamp: str = "") -> None:
     total_steps = 7
-    video_path = None
 
     total_start = time.time()
     _print_banner()

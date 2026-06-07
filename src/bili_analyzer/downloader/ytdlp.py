@@ -9,16 +9,19 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+import requests
+
 logger = logging.getLogger("bili_analyzer.downloader")
+
+# 模拟浏览器的 User-Agent / Referer，B站风控必需
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+_BROWSER_REFERER = "https://www.bilibili.com"
 
 
 def check_ytdlp() -> bool:
-    # 优先检查 Python 模块，再检查命令行
-    try:
-        import yt_dlp
-        return True
-    except ImportError:
-        pass
     if not shutil.which('yt-dlp'):
         raise RuntimeError(
             "未找到 yt-dlp!\n\n"
@@ -28,13 +31,96 @@ def check_ytdlp() -> bool:
     return True
 
 
+def _warm_buvid3(cookies: dict) -> dict:
+    """通过访问 bilibili.com 预热 buvid3 等风控 cookie
+
+    B站风控对 /x/player/v2 等接口要求请求中包含 buvid3 cookie。
+    该 cookie 由 B站在首次访问 https://www.bilibili.com 时通过 Set-Cookie 写入。
+    QR 登录返回的 cookies 中不含 buvid3，需主动预热。
+
+    Args:
+        cookies: 现有 cookies 字典（用于已登录身份访问首页）
+
+    Returns:
+        dict: 合并 buvid3 等风控 cookie 后的新字典（不修改原 dict）
+    """
+    enriched = dict(cookies) if cookies else {}
+    try:
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": _BROWSER_UA,
+            "Referer": _BROWSER_REFERER,
+        })
+        # 若有 SESSDATA 等登录态，一并设置
+        if cookies:
+            for name, value in cookies.items():
+                session.cookies.set(name, value, domain=".bilibili.com")
+        session.get("https://www.bilibili.com", timeout=10, allow_redirects=True)
+        for cookie in session.cookies:
+            if cookie.domain.endswith("bilibili.com"):
+                enriched.setdefault(cookie.name, cookie.value)
+        logger.debug(f"buvid3 预热后 cookies: {list(enriched.keys())}")
+    except Exception as e:
+        logger.warning(f"buvid3 预热失败（不影响主流程）: {e}")
+    return enriched
+
+
 def _write_cookies_file(cookies: dict, output_dir: Path) -> Path:
+    """将 cookie 字典写入临时 Netscape 文件
+
+    ⚠️ 不再预热 buvid3 / b_nut：B站 WAF（openresty）会把"requests 库访问
+    首页拿到的低信任度 buvid3"识别为机器人特征，反而触发 412。直接使用 QR
+    登录返回的 cookies 即可（SESSDATA/sid/first_domain 等已通过 WAF 验证）。
+
+    保留 _warm_buvid3 函数仅作为历史参考，不要再调用。
+
+    Args:
+        cookies: B站 Cookie 字典（QR 登录获取的 8 项）
+        output_dir: 临时文件输出目录
+
+    Returns:
+        Path: 写入的 .cookies.txt 路径
+    """
+    output_dir = Path(output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
     cookies_path = output_dir / ".cookies.txt"
+
     lines = ["# Netscape HTTP Cookie File", ""]
     for name, value in cookies.items():
         lines.append(f".bilibili.com\tTRUE\t/\tTRUE\t0\t{name}\t{value}")
     cookies_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    logger.info(f"已写入 cookies 文件: {cookies_path} ({len(cookies)} 项)")
     return cookies_path
+
+
+def _resolve_cookies_path(
+    cookies: Optional[dict],
+    cookies_file: Optional[str],
+    output_dir: Path,
+) -> Optional[Path]:
+    """按优先级选择 cookies 路径：
+    1. 用户显式提供的 cookies_file（最高优先级，浏览器导出）
+    2. QR 登录 cookies + buvid3 预热
+    """
+    if cookies_file and Path(cookies_file).is_file():
+        logger.info(f"使用外部 cookies 文件: {cookies_file}")
+        return Path(cookies_file)
+    if cookies:
+        return _write_cookies_file(cookies, output_dir)
+    return None
+
+
+def _yt_dlp_base_args(cookies_path: Optional[Path]) -> list:
+    """构造 yt-dlp 命令的公共部分（UA/Referer/通用选项）"""
+    cmd = [
+        "--user-agent", _BROWSER_UA,
+        "--add-headers", f"Referer:{_BROWSER_REFERER}",
+        "--no-cache-dir",
+        "--retries", "10",
+    ]
+    if cookies_path:
+        cmd.extend(["--cookies", str(cookies_path)])
+    return cmd
 
 
 def download_video(
@@ -42,6 +128,7 @@ def download_video(
     output_dir: Path,
     quality: str = "1080p",
     cookies: Optional[dict] = None,
+    cookies_file: Optional[str] = None,
     output_name: str = "video",
 ) -> Path:
     check_ytdlp()
@@ -62,10 +149,6 @@ def download_video(
     }
     format_str = format_map.get(quality, format_map["1080p"])
 
-    cookies_path = None
-    if cookies:
-        cookies_path = _write_cookies_file(cookies, output_dir)
-
     # 解析 URL 中的分P参数，确保 yt-dlp 下载正确的分P
     # B站多P视频在 yt-dlp 中被视为播放列表，--no-playlist 会忽略 ?p=N 参数导致总是下载第1P
     import urllib.parse
@@ -73,20 +156,18 @@ def download_video(
     query_params = urllib.parse.parse_qs(parsed.query)
     page_num = query_params.get("p", ["1"])[0]
 
+    cookies_path = _resolve_cookies_path(cookies, cookies_file, output_dir)
+
     cmd = [
         "yt-dlp",
         "-f", format_str,
         "--merge-output-format", "mp4",
         "-o", output_template,
         "--playlist-items", page_num,
-        "--no-warnings",
-        "--no-cache-dir",
         "--abort-on-unavailable-fragment",
-        "--retries", "10",
         "--fragment-retries", "10",
     ]
-    if cookies_path:
-        cmd.extend(["--cookies", str(cookies_path)])
+    cmd.extend(_yt_dlp_base_args(cookies_path))
     cmd.append(video_url)
 
     print(f"正在下载视频: {video_url}")
@@ -96,7 +177,7 @@ def download_video(
     logger.debug(f"yt-dlp 命令: {' '.join(cmd)}")
 
     try:
-        result = subprocess.run(
+        subprocess.run(
             cmd,
             check=True,
             capture_output=True,
@@ -129,7 +210,7 @@ def download_video(
         logger.error(f"视频下载失败, 退出码: {e.returncode}, stderr: {stderr_msg}")
         raise RuntimeError(f"视频下载失败 (退出码 {e.returncode}): {stderr_msg}") from e
     finally:
-        if cookies_path and cookies_path.exists():
+        if cookies_path and cookies_path.exists() and cookies_path == (output_dir / ".cookies.txt"):
             try:
                 cookies_path.unlink()
             except OSError:
@@ -141,6 +222,7 @@ def download_subtitle(
     output_dir: Path,
     sub_langs: str = "zh-CN,zh-Hans,zh-TW,ai-zh",
     cookies: Optional[dict] = None,
+    cookies_file: Optional[str] = None,
     output_name: str = "video",
 ) -> Optional[Path]:
     """使用 yt-dlp 下载 B站字幕并转换为 SRT
@@ -149,7 +231,8 @@ def download_subtitle(
         video_url: 视频 URL（含 ?p=N 分P参数）
         output_dir: 字幕输出目录
         sub_langs: 字幕语言列表，逗号分隔（传给 --sub-langs）
-        cookies: B站 Cookie 字典
+        cookies: B站 Cookie 字典（QR 登录获取的 4 项）
+        cookies_file: 用户提供的浏览器导出的 cookies.txt 路径（优先级高于 cookies）
         output_name: 输出文件名前缀（不含扩展名）
 
     Returns:
@@ -168,9 +251,7 @@ def download_subtitle(
 
     output_template = str(output_dir / f"{output_name}.%(ext)s")
 
-    cookies_path = None
-    if cookies:
-        cookies_path = _write_cookies_file(cookies, output_dir)
+    cookies_path = _resolve_cookies_path(cookies, cookies_file, output_dir)
 
     cmd = [
         "yt-dlp",
@@ -180,12 +261,8 @@ def download_subtitle(
         "--skip-download",
         "--playlist-items", page_num,
         "-o", output_template,
-        "--no-warnings",
-        "--no-cache-dir",
-        "--retries", "10",
     ]
-    if cookies_path:
-        cmd.extend(["--cookies", str(cookies_path)])
+    cmd.extend(_yt_dlp_base_args(cookies_path))
     cmd.append(video_url)
 
     print(f"正在下载字幕: {video_url}")
@@ -244,7 +321,7 @@ def download_subtitle(
         # yt-dlp 在没有匹配字幕时也会返回非零退出码，视为"无字幕"而非错误
         return None
     finally:
-        if cookies_path and cookies_path.exists():
+        if cookies_path and cookies_path.exists() and cookies_path == (output_dir / ".cookies.txt"):
             try:
                 cookies_path.unlink()
             except OSError:

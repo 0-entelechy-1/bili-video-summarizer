@@ -16,6 +16,7 @@ llm:
 transcriber:
   prefer: auto             # 可选: auto / whisper / volcengine
   sub_langs: zh-CN,zh-Hans,zh-TW,ai-zh  # yt-dlp 字幕语言列表（逗号分隔），中文人工优先，AI 兜底
+  cookies_file: null       # 可选：浏览器导出的 cookies.txt 绝对路径，优先级高于 QR 登录 cookies
   whisper:
     model: medium          # tiny/base/small/medium/large
     model_path: ./model    # 本地模型目录，放置模型文件后优先从此目录加载

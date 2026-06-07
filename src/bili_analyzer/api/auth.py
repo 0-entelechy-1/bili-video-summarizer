@@ -86,14 +86,17 @@ def poll_login_status(qrcode_key: str) -> Tuple[bool, Dict[str, str]]:
         message = inner_data.get("message", "")
 
         if code == 0:
-            # 登录成功，从 url 中提取 cookie
+            # 登录成功：把 URL query 灌进 session 后取全量 cookies
+            # （与 outputs/videos/bili_login.py 的做法一致，保证 sid / first_domain 等
+            #  Set-Cookie 下发的 cookie 也能被保留，绕开 B站 /x/player/v2 的 412 校验）
             url = inner_data.get("url", "")
-            cookies = _extract_cookies_from_url(url)
+            _set_url_cookies_to_session(session, url)
+            cookies = _session_cookies_to_dict(session.cookies)
             if cookies:
-                logger.info("扫码登录成功")
+                logger.info(f"扫码登录成功（{len(cookies)} 项 cookie）")
                 return True, cookies
             else:
-                logger.warning("登录成功但未从 URL 中提取到 Cookie")
+                logger.warning("登录成功但 session 中无任何 cookie")
                 return False, {}
         elif code == 86038:
             logger.warning("二维码已过期")
@@ -112,28 +115,37 @@ def poll_login_status(qrcode_key: str) -> Tuple[bool, Dict[str, str]]:
     return False, {}
 
 
-def _extract_cookies_from_url(url: str) -> Dict[str, str]:
-    """从登录回调 URL 的查询参数中提取 Cookie 信息
+def _set_url_cookies_to_session(session: requests.Session, url: str) -> None:
+    """将登录回调 URL 的 query 参数全部灌进 session.cookies
+
+    B站扫码登录成功后，会在 data.url 中以 query string 形式回传本次登录
+    写入的关键 cookie（与 Set-Cookie 头下发的 cookie 有部分重叠）。本函数
+    仅负责"URL query → session.cookies"这一步，让 session 累积所有可用
+    cookie，最后由调用方统一从 session.cookies 提取。
 
     Args:
-        url: 登录回调 URL
-
-    Returns:
-        Dict[str, str]: Cookie 字典
+        session: 已完成登录轮询的 Session（已含 Set-Cookie 累积的 cookies）
+        url: 登录回调 URL（含 ?SESSDATA=...&bili_jct=...&...）
     """
     if not url:
-        return {}
-
+        return
     parsed = urlparse(url)
     query = parse_qs(parsed.query)
-
-    cookies = {}
-    for key in ["SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5", "sid"]:
-        values = query.get(key)
+    for key, values in query.items():
         if values:
-            cookies[key] = values[0]
+            session.cookies.set(key, values[0], domain=".bilibili.com")
 
-    return cookies
+
+def _session_cookies_to_dict(jar) -> Dict[str, str]:
+    """把 requests Session 的 cookie jar 转为 {name: value} 字典
+
+    Args:
+        jar: requests.cookies.RequestsCookieJar 实例
+
+    Returns:
+        Dict[str, str]: cookie 名→值 字典
+    """
+    return {cookie.name: cookie.value for cookie in jar}
 
 
 def save_credentials(cookies: Dict[str, str]) -> None:

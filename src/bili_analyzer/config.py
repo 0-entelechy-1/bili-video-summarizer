@@ -48,6 +48,7 @@ class VolcengineConfig:
 class TranscriberConfig:
     prefer: str = "auto"  # auto / whisper / volcengine
     sub_langs: str = "zh-CN,zh-Hans,zh-TW,ai-zh"  # yt-dlp 字幕语言列表（中文人工优先，AI 兜底）
+    cookies_file: Optional[str] = None  # 浏览器导出的 cookies.txt 路径（优先级高于 QR 登录 cookies）
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     volcengine: VolcengineConfig = field(default_factory=VolcengineConfig)
 
@@ -148,6 +149,7 @@ def _dict_to_config(data: dict) -> AppConfig:
     if trans_data:
         config.transcriber.prefer = trans_data.get("prefer", config.transcriber.prefer)
         config.transcriber.sub_langs = trans_data.get("sub_langs", config.transcriber.sub_langs)
+        config.transcriber.cookies_file = trans_data.get("cookies_file", config.transcriber.cookies_file)
         whisper_data = trans_data.get("whisper", {})
         if whisper_data:
             config.transcriber.whisper.model = whisper_data.get("model", config.transcriber.whisper.model)
