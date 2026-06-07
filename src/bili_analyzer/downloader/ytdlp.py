@@ -1,15 +1,30 @@
-"""yt-dlp 视频下载封装
+"""yt-dlp 视频/字幕下载封装
 
-使用 yt-dlp 下载 B站视频，支持画质选择和进度提示。
+使用 yt-dlp 下载 B站视频/字幕，支持画质选择和实时进度提示。
+
+进度解析：
+- 给 yt-dlp 加 `--newline` 让每条进度单独一行输出
+- 用 `subprocess.Popen` + 独立线程逐行读取 stdout
+- 正则解析 `[download] X% of Y at Z ETA T` 形式
+- 解析结果通过 Rich Progress 实时显示
 """
 
 import logging
+import re
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Optional
 
 import requests
+
+from bili_analyzer.ui.console import (
+    console,
+    make_download_progress,
+    print_info,
+    spinner,
+)
 
 logger = logging.getLogger("bili_analyzer.downloader")
 
@@ -117,11 +132,134 @@ def _yt_dlp_base_args(cookies_path: Optional[Path]) -> list:
         "--add-headers", f"Referer:{_BROWSER_REFERER}",
         "--no-cache-dir",
         "--retries", "10",
+        "--newline",  # 进度行单独一行输出，便于实时解析
     ]
     if cookies_path:
         cmd.extend(["--cookies", str(cookies_path)])
     return cmd
 
+
+# ---------- yt-dlp 进度行解析 ----------
+
+# 匹配示例：
+#   [download]  45.2% of   120.5MiB at    5.2MiB/s ETA 00:14
+#   [download] 100% of  120.5MiB at    5.2MiB/s in 00:23
+#   [download]   8.7% of ~  30.0MiB at  Unknown B/s
+_YTDLP_DOWNLOAD_RE = re.compile(
+    r"\[download\]\s+"
+    r"(?P<percent>\d+(?:\.\d+)?)%\s+of\s+"
+    r"(?:~\s*)?"
+    r"(?P<total>\S+)\s+at\s+"
+    r"(?P<speed>\S+)\s+"
+    r"(?:ETA\s+(?P<eta>\S+)|in\s+(?P<elapsed>\S+))"
+)
+
+# 匹配通用 yt-dlp 状态行（用于在解析失败时回退显示）：
+#   [Merger] Merging formats into "video.mp4"
+#   [ExtractAudio] Destination: video.mp3
+#   [FixupM4a] Fixup running ...
+_YTDLP_STAGE_RE = re.compile(
+    r"\[(?P<stage>[A-Za-z][A-Za-z0-9_]+)\]\s+(?P<msg>.+)"
+)
+
+
+def _parse_ytdlp_progress_line(line: str) -> Optional[dict]:
+    """从 yt-dlp 单行输出中提取进度信息。
+
+    Returns:
+        dict: 含 percent/total/speed/eta/elapsed，或 None（非进度行）
+    """
+    line = line.strip()
+    if not line:
+        return None
+    m = _YTDLP_DOWNLOAD_RE.search(line)
+    if m:
+        return {
+            "percent": float(m.group("percent")),
+            "total": m.group("total"),
+            "speed": m.group("speed"),
+            "eta": m.group("eta"),
+            "elapsed": m.group("elapsed"),
+        }
+    return None
+
+
+def _parse_ytdlp_stage_line(line: str) -> Optional[dict]:
+    """从 yt-dlp 单行输出中提取阶段信息（合并/转码等）。"""
+    line = line.strip()
+    m = _YTDLP_STAGE_RE.search(line)
+    if not m:
+        return None
+    stage = m.group("stage")
+    msg = m.group("msg").strip()
+    # 过滤 [generic] 之类的低信号行
+    if stage in ("generic", "debug", "info"):
+        return None
+    return {"stage": stage, "msg": msg}
+
+
+def _stream_ytdlp_progress(
+    process: subprocess.Popen,
+    progress,
+    task_id,
+    description: str,
+    stop_event: threading.Event,
+) -> None:
+    """独立线程：持续读取 yt-dlp stdout，更新 Rich Progress。
+
+    Args:
+        process: 已启动的 yt-dlp 进程
+        progress: Rich Progress 实例
+        task_id: 当前任务 ID
+        description: 任务描述
+        stop_event: 外部停止信号
+    """
+    assert process.stdout is not None
+    last_stage_text = ""
+    try:
+        for raw_line in process.stdout:
+            if stop_event.is_set():
+                break
+            line = raw_line.rstrip("\n").rstrip("\r")
+            if not line:
+                continue
+            logger.debug(f"yt-dlp: {line}")
+
+            parsed = _parse_ytdlp_progress_line(line)
+            if parsed is not None:
+                # 进度行：更新 percent + 详细字段
+                progress.update(
+                    task_id,
+                    completed=parsed["percent"],
+                    total=100,
+                )
+                # 临时用 description 字段显示已下载/速度/ETA
+                eta = parsed.get("eta") or parsed.get("elapsed") or "?"
+                progress.tasks[task_id].description = (
+                    f"{description} | {parsed['total']} | {parsed['speed']} | ETA {eta}"
+                )
+            else:
+                stage = _parse_ytdlp_stage_line(line)
+                if stage is not None:
+                    text = f"[{stage['stage']}] {stage['msg']}"
+                    if text != last_stage_text:
+                        # 阶段行：只更新 description，百分比不变
+                        progress.tasks[task_id].description = f"{description} | {text[:60]}"
+                        last_stage_text = text
+    except (ValueError, OSError):
+        # stdout 关闭（进程结束）时的正常现象
+        pass
+    except Exception as e:
+        logger.debug(f"yt-dlp 进度解析线程异常: {e}")
+    finally:
+        # 收尾：把 description 还原
+        try:
+            progress.tasks[task_id].description = description
+        except Exception:
+            pass
+
+
+# ---------- 公开下载函数 ----------
 
 def download_video(
     video_url: str,
@@ -170,51 +308,74 @@ def download_video(
     cmd.extend(_yt_dlp_base_args(cookies_path))
     cmd.append(video_url)
 
-    print(f"正在下载视频: {video_url}")
-    print(f"画质: {quality}")
-    print()
+    print_info(f"正在下载视频: {video_url} (画质: {quality})")
     logger.info(f"下载视频: url={video_url}, 画质={quality}, 输出目录={output_dir}")
     logger.debug(f"yt-dlp 命令: {' '.join(cmd)}")
 
+    # 启动 yt-dlp 子进程，stdout 行缓冲
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        bufsize=1,  # 行缓冲
+    )
+
+    description = f"⬇️  下载视频 ({quality})"
+    stop_event = threading.Event()
     try:
-        subprocess.run(
-            cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-        )
+        with make_download_progress() as progress:
+            task_id = progress.add_task(description, total=100, completed=0)
+            reader_thread = threading.Thread(
+                target=_stream_ytdlp_progress,
+                args=(process, progress, task_id, description, stop_event),
+                daemon=True,
+            )
+            reader_thread.start()
 
-        video_files = list(output_dir.glob("*.mp4"))
-        logger.debug(f"在 {output_dir} 中找到的 mp4 文件: {video_files}")
+            # 等待 yt-dlp 退出（同步等待，确保 stderr 被收集）
+            return_code = process.wait()
 
-        if not video_files:
-            raise RuntimeError("下载完成但未找到视频文件")
+            stop_event.set()
+            reader_thread.join(timeout=2)
 
-        # 优先选择文件名与 output_name 匹配的视频，避免目录中残留其他视频文件导致选错
-        expected_name = f"{output_name}.mp4"
-        matched_files = [p for p in video_files if p.name == expected_name]
-        if matched_files:
-            video_path = matched_files[0]
-        else:
-            video_path = max(video_files, key=lambda p: p.stat().st_mtime)
-        file_size_mb = video_path.stat().st_size / (1024 * 1024)
+            # 把 stderr 也写到日志（出问题时调试用）
+            stderr_text = (process.stderr.read() if process.stderr else "") or ""
+            if return_code != 0 and stderr_text:
+                logger.error(f"yt-dlp stderr: {stderr_text[:2000]}")
 
-        print(f"\n视频已下载: {video_path.name} ({file_size_mb:.1f} MB)")
-        logger.info(f"视频下载完成: {video_path} ({file_size_mb:.1f} MB)")
-        return video_path
-
-    except subprocess.CalledProcessError as e:
-        stderr_msg = (e.stderr or "").strip()[:500]
-        logger.error(f"视频下载失败, 退出码: {e.returncode}, stderr: {stderr_msg}")
-        raise RuntimeError(f"视频下载失败 (退出码 {e.returncode}): {stderr_msg}") from e
+            if return_code != 0:
+                stderr_msg = stderr_text.strip()[:500]
+                raise RuntimeError(f"视频下载失败 (退出码 {return_code}): {stderr_msg}")
     finally:
         if cookies_path and cookies_path.exists() and cookies_path == (output_dir / ".cookies.txt"):
             try:
                 cookies_path.unlink()
             except OSError:
                 pass
+
+    # 找下载的 mp4
+    video_files = list(output_dir.glob("*.mp4"))
+    logger.debug(f"在 {output_dir} 中找到的 mp4 文件: {video_files}")
+
+    if not video_files:
+        raise RuntimeError("下载完成但未找到视频文件")
+
+    # 优先选择文件名与 output_name 匹配的视频，避免目录中残留其他视频文件导致选错
+    expected_name = f"{output_name}.mp4"
+    matched_files = [p for p in video_files if p.name == expected_name]
+    if matched_files:
+        video_path = matched_files[0]
+    else:
+        video_path = max(video_files, key=lambda p: p.stat().st_mtime)
+    file_size_mb = video_path.stat().st_size / (1024 * 1024)
+
+    from bili_analyzer.ui.console import print_success
+    print_success(f"视频已下载: {video_path.name} ({file_size_mb:.1f} MB)")
+    logger.info(f"视频下载完成: {video_path} ({file_size_mb:.1f} MB)")
+    return video_path
 
 
 def download_subtitle(
@@ -265,67 +426,68 @@ def download_subtitle(
     cmd.extend(_yt_dlp_base_args(cookies_path))
     cmd.append(video_url)
 
-    print(f"正在下载字幕: {video_url}")
-    print(f"字幕语言: {sub_langs}")
-    print()
+    print_info(f"正在下载字幕: {video_url} (语言: {sub_langs})")
     logger.info(f"下载字幕: url={video_url}, sub_langs={sub_langs}, 输出目录={output_dir}")
     logger.debug(f"yt-dlp 命令: {' '.join(cmd)}")
 
-    try:
-        subprocess.run(
-            cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-        )
-
-        # 扫描 output_dir 中所有 SRT 文件，找到属于本次下载的
-        # yt-dlp 输出文件名形如: <output_name>.<lang>.srt (e.g. video.zh-CN.srt)
-        srt_candidates = list(output_dir.glob(f"{output_name}*.srt"))
-        # 过滤掉完全等于 <output_name>.srt 的（理论上不会存在因为 yt-dlp 总会加语言后缀）
-        srt_candidates = [p for p in srt_candidates if p.name != f"{output_name}.srt"]
-
-        if not srt_candidates:
-            logger.info("yt-dlp 未下载到任何 SRT 字幕文件")
+    # 字幕下载用 spinner（字幕文件通常很小，进度条意义不大）
+    with spinner("yt-dlp 字幕下载中…") as sp:
+        try:
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+            )
+            sp.update("字幕下载完成，正在检查文件…")
+        except subprocess.CalledProcessError as e:
+            stderr_msg = (e.stderr or "").strip()[:500]
+            logger.error(f"yt-dlp 字幕下载失败, 退出码: {e.returncode}, stderr: {stderr_msg}")
+            # yt-dlp 在没有匹配字幕时也会返回非零退出码，视为"无字幕"而非错误
             return None
+        finally:
+            if cookies_path and cookies_path.exists() and cookies_path == (output_dir / ".cookies.txt"):
+                try:
+                    cookies_path.unlink()
+                except OSError:
+                    pass
 
-        # 优先级: 中文人工字幕 (zh-CN/zh-Hans/zh-TW) > AI 字幕 (ai-zh) > 其他
-        def _priority(p: Path) -> int:
-            name = p.name.lower()
-            if "ai-zh" in name:
-                return 2  # AI 字幕优先级最低
-            if "zh" in name:
-                return 0  # 人工中文字幕优先
-            return 1
+    # 扫描 output_dir 中所有 SRT 文件，找到属于本次下载的
+    # yt-dlp 输出文件名形如: <output_name>.<lang>.srt (e.g. video.zh-CN.srt)
+    srt_candidates = list(output_dir.glob(f"{output_name}*.srt"))
+    # 过滤掉完全等于 <output_name>.srt 的（理论上不会存在因为 yt-dlp 总会加语言后缀）
+    srt_candidates = [p for p in srt_candidates if p.name != f"{output_name}.srt"]
 
-        srt_candidates.sort(key=_priority)
-        selected = srt_candidates[0]
-        logger.debug(f"选中的字幕文件: {selected.name} (候选: {[p.name for p in srt_candidates]})")
-
-        # 重命名为 <output_name>.srt（覆盖）
-        target = output_dir / f"{output_name}.srt"
-        if selected.resolve() != target.resolve():
-            if target.exists():
-                target.unlink()
-            selected.rename(target)
-            logger.info(f"字幕已重命名: {selected.name} -> {target.name}")
-
-        print(f"\n字幕已下载: {target.name}")
-        return target
-
-    except subprocess.CalledProcessError as e:
-        stderr_msg = (e.stderr or "").strip()[:500]
-        logger.error(f"yt-dlp 字幕下载失败, 退出码: {e.returncode}, stderr: {stderr_msg}")
-        # yt-dlp 在没有匹配字幕时也会返回非零退出码，视为"无字幕"而非错误
+    if not srt_candidates:
+        logger.info("yt-dlp 未下载到任何 SRT 字幕文件")
         return None
-    finally:
-        if cookies_path and cookies_path.exists() and cookies_path == (output_dir / ".cookies.txt"):
-            try:
-                cookies_path.unlink()
-            except OSError:
-                pass
+
+    # 优先级: 中文人工字幕 (zh-CN/zh-Hans/zh-TW) > AI 字幕 (ai-zh) > 其他
+    def _priority(p: Path) -> int:
+        name = p.name.lower()
+        if "ai-zh" in name:
+            return 2  # AI 字幕优先级最低
+        if "zh" in name:
+            return 0  # 人工中文字幕优先
+        return 1
+
+    srt_candidates.sort(key=_priority)
+    selected = srt_candidates[0]
+    logger.debug(f"选中的字幕文件: {selected.name} (候选: {[p.name for p in srt_candidates]})")
+
+    # 重命名为 <output_name>.srt（覆盖）
+    target = output_dir / f"{output_name}.srt"
+    if selected.resolve() != target.resolve():
+        if target.exists():
+            target.unlink()
+        selected.rename(target)
+        logger.info(f"字幕已重命名: {selected.name} -> {target.name}")
+
+    from bili_analyzer.ui.console import print_success
+    print_success(f"字幕已下载: {target.name}")
+    return target
 
 
 def extract_audio(
@@ -345,11 +507,12 @@ def extract_audio(
         "-y", str(output_path),
     ]
 
-    print("正在提取音频...")
+    print_info("正在提取音频…")
 
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
-        print(f"音频已提取: {output_path.name}")
+        from bili_analyzer.ui.console import print_success
+        print_success(f"音频已提取: {output_path.name}")
         return output_path
     except subprocess.CalledProcessError as e:
         stderr_msg = (e.stderr or "").strip()[:500]

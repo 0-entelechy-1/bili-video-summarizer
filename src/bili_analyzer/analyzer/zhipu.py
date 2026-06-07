@@ -5,6 +5,7 @@
 """
 
 import os
+import time
 from typing import Any, Dict
 
 from bili_analyzer.analyzer.base import (
@@ -14,6 +15,11 @@ from bili_analyzer.analyzer.base import (
     normalize_transcript_format,
     parse_llm_response,
     validate_analysis_result,
+)
+from bili_analyzer.ui.console import (
+    print_info,
+    print_success,
+    spinner,
 )
 
 
@@ -47,9 +53,9 @@ class ZhipuAnalyzer(BaseAnalyzer):
         result = parse_llm_response(response_text)
         validate_analysis_result(result)
 
-        print(f"智谱分析完成")
-        print(f"  知识点: {len(result.get('knowledge_points', []))} 个")
-        print(f"  关键截图: {len(result.get('key_screenshots', []))} 个")
+        print_success("智谱分析完成")
+        print_info(f"  知识点: {len(result.get('knowledge_points', []))} 个")
+        print_info(f"  关键截图: {len(result.get('key_screenshots', []))} 个")
 
         return result
 
@@ -69,9 +75,6 @@ class ZhipuAnalyzer(BaseAnalyzer):
 
         client = ZhipuAI(api_key=self.api_key)
 
-        print(f"正在调用智谱 API (模型: {self.model})...")
-        print("  这可能需要30-120秒，请耐心等待...")
-
         if force_json:
             system_content = (
                 "你是一位专业的学术内容分析专家。"
@@ -101,7 +104,14 @@ class ZhipuAnalyzer(BaseAnalyzer):
         if force_json:
             kwargs["response_format"] = {"type": "json_object"}
 
-        response = client.chat.completions.create(**kwargs)
+        with spinner(f"调用智谱 API ({self.model}) 中…  30-120 秒，请耐心等待") as sp:
+            _t0 = time.time()
+            try:
+                response = client.chat.completions.create(**kwargs)
+            finally:
+                sp.update(
+                    f"调用智谱 API 完成（耗时 {int(time.time() - _t0)}s），正在解析结果…"
+                )
 
         content = response.choices[0].message.content
         if not content or not content.strip():
@@ -117,9 +127,6 @@ class ZhipuAnalyzer(BaseAnalyzer):
             base_url="https://open.bigmodel.cn/api/paas/v4/",
         )
 
-        print(f"正在调用智谱 API (模型: {self.model}, OpenAI兼容模式)...")
-        print("  这可能需要30-120秒，请耐心等待...")
-
         if force_json:
             system_content = (
                 "你是一位专业的学术内容分析专家。"
@@ -149,7 +156,14 @@ class ZhipuAnalyzer(BaseAnalyzer):
         if force_json:
             kwargs["response_format"] = {"type": "json_object"}
 
-        response = client.chat.completions.create(**kwargs)
+        with spinner(f"调用智谱 API ({self.model}, OpenAI 兼容) 中…  30-120 秒") as sp:
+            _t0 = time.time()
+            try:
+                response = client.chat.completions.create(**kwargs)
+            finally:
+                sp.update(
+                    f"调用智谱 API 完成（耗时 {int(time.time() - _t0)}s），正在解析结果…"
+                )
 
         content = response.choices[0].message.content
         if not content or not content.strip():

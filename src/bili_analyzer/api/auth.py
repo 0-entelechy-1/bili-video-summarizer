@@ -14,6 +14,15 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
+from bili_analyzer.ui.console import (
+    console,
+    print_error,
+    print_info,
+    print_success,
+    print_warning,
+    spinner,
+)
+
 logger = logging.getLogger("bili_analyzer")
 
 _QRCODE_GENERATE_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
@@ -68,50 +77,56 @@ def poll_login_status(qrcode_key: str) -> Tuple[bool, Dict[str, str]]:
 
     max_polls = 60
     interval = 3
+    last_state = "等待扫码"
 
-    for attempt in range(max_polls):
-        resp = session.get(
-            _QRCODE_POLL_URL,
-            params={"qrcode_key": qrcode_key},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    with spinner("等待扫码…") as sp:
+        for attempt in range(max_polls):
+            resp = session.get(
+                _QRCODE_POLL_URL,
+                params={"qrcode_key": qrcode_key},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
 
-        if data.get("code") != 0:
-            logger.warning(f"轮询接口错误: {data.get('message')}")
-            time.sleep(interval)
-            continue
+            if data.get("code") != 0:
+                logger.warning(f"轮询接口错误: {data.get('message')}")
+                time.sleep(interval)
+                continue
 
-        inner_data = data.get("data", {})
-        code = inner_data.get("code", -1)
-        message = inner_data.get("message", "")
+            inner_data = data.get("data", {})
+            code = inner_data.get("code", -1)
+            message = inner_data.get("message", "")
 
-        if code == 0:
-            # 登录成功：把 URL query 灌进 session 后取全量 cookies
-            # （与 outputs/videos/bili_login.py 的做法一致，保证 sid / first_domain 等
-            #  Set-Cookie 下发的 cookie 也能被保留，绕开 B站 /x/player/v2 的 412 校验）
-            url = inner_data.get("url", "")
-            _set_url_cookies_to_session(session, url)
-            cookies = _session_cookies_to_dict(session.cookies)
-            if cookies:
-                logger.info(f"扫码登录成功（{len(cookies)} 项 cookie）")
-                return True, cookies
-            else:
-                logger.warning("登录成功但 session 中无任何 cookie")
+            if code == 0:
+                # 登录成功：把 URL query 灌进 session 后取全量 cookies
+                # （与 outputs/videos/bili_login.py 的做法一致，保证 sid / first_domain 等
+                #  Set-Cookie 下发的 cookie 也能被保留，绕开 B站 /x/player/v2 的 412 校验）
+                url = inner_data.get("url", "")
+                _set_url_cookies_to_session(session, url)
+                cookies = _session_cookies_to_dict(session.cookies)
+                if cookies:
+                    logger.info(f"扫码登录成功（{len(cookies)} 项 cookie）")
+                    return True, cookies
+                else:
+                    logger.warning("登录成功但 session 中无任何 cookie")
+                    return False, {}
+            elif code == 86038:
+                sp.update("[bold red]二维码已过期[/]，[bold cyan]请重新运行 --login[/]")
+                logger.warning("二维码已过期")
                 return False, {}
-        elif code == 86038:
-            logger.warning("二维码已过期")
-            return False, {}
-        elif code == 86090:
-            logger.info("已扫码，等待确认...")
-        elif code == 86101:
-            if attempt == 0:
-                logger.info("等待扫码...")
-        else:
-            logger.warning(f"未知状态码: {code}, message={message}")
+            elif code == 86090:
+                if last_state != "已扫码":
+                    sp.update("[bold green]✅ 已扫码，等待手机端确认…[/]")
+                    last_state = "已扫码"
+                logger.info("已扫码，等待确认...")
+            elif code == 86101:
+                if attempt == 0:
+                    logger.info("等待扫码...")
+            else:
+                logger.warning(f"未知状态码: {code}, message={message}")
 
-        time.sleep(interval)
+            time.sleep(interval)
 
     logger.warning("登录轮询超时")
     return False, {}
@@ -243,33 +258,40 @@ def perform_login() -> Optional[Dict[str, str]]:
     Returns:
         Optional[Dict[str, str]]: 登录成功返回 cookies，失败返回 None
     """
-    print("=" * 50)
-    print("B站扫码登录")
-    print("=" * 50)
+    from rich.panel import Panel
+    from rich.text import Text
+
+    title = Text()
+    title.append("🔐  ", style="bold cyan")
+    title.append("B站扫码登录", style="bold bright_cyan")
+    console.print(Panel(title, border_style="bright_cyan", expand=False))
+    console.print()
 
     try:
         qrcode_url, qrcode_key = get_login_qrcode()
     except Exception as exc:
-        print(f"❌ 获取二维码失败: {exc}")
+        print_error(f"获取二维码失败: {exc}")
         logger.error(f"获取二维码失败: {exc}")
         return None
 
-    print("\n请使用 B站 App 扫描二维码登录:\n")
+    print_info("请使用 B站 App 扫描下方二维码登录:")
+    console.print()
 
     # 优先尝试终端显示二维码
     if not display_qrcode_terminal(qrcode_url):
-        print("正在用浏览器打开二维码页面...")
+        print_info("qrcode 库未安装，回退到浏览器显示二维码…")
         display_qrcode_browser(qrcode_url)
 
-    print("\n等待扫码...")
+    console.print()
     success, cookies = poll_login_status(qrcode_key)
     if success and cookies:
-        print("\n✅ 登录成功！")
-        print(f"   已保存 Cookie ({len(cookies)} 项)")
-        print(f"   凭证文件: {PROJECT_ROOT_COOKIES_FILE}")
-        print("\n下次运行程序时将自动加载此凭证")
+        console.print()
+        print_success(f"✅ 登录成功！已保存 Cookie ({len(cookies)} 项)")
+        print_info(f"凭证文件: {PROJECT_ROOT_COOKIES_FILE}")
+        print_info("下次运行程序时将自动加载此凭证")
         save_cookies_netscape(cookies, PROJECT_ROOT_COOKIES_FILE)
         return cookies
 
-    print("\n❌ 登录失败")
+    console.print()
+    print_error("❌ 登录失败")
     return None

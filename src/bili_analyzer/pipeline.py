@@ -23,6 +23,22 @@ from bili_analyzer.downloader.ytdlp import download_video, check_ytdlp
 from bili_analyzer.screenshot.ffmpeg import check_ffmpeg, batch_capture
 from bili_analyzer.parser.srt import parse_srt_file, get_full_transcript
 from bili_analyzer.reporter.markdown import generate_markdown
+from bili_analyzer.ui.console import (
+    check_conda_env,
+    console,
+    format_elapsed,
+    print_banner,
+    print_config_summary,
+    print_error,
+    print_info,
+    print_output_tree,
+    print_step_elapsed,
+    print_step_header,
+    print_summary_table,
+    print_success,
+    print_video_card,
+    print_warning,
+)
 
 logger = logging.getLogger("bili_analyzer")
 
@@ -34,42 +50,27 @@ def _safe_dirname(title: str) -> str:
 
 
 def _print_banner():
-    print("""
-╔══════════════════════════════════════════════════════════════╗
-║                                                              ║
-║         B站视频分析器  v1.0.0                                ║
-║                                                              ║
-║         自动提取知识点 · 生成学习报告                        ║
-║                                                              ║
-╚══════════════════════════════════════════════════════════════╝
-""")
+    """彩色启动横幅（步骤1的开始处也会用）"""
+    from bili_analyzer import __version__
+    print_banner(__version__)
 
 
 def _print_step(step: int, total: int, message: str):
-    print(f"\n[步骤 {step}/{total}] {message}...")
-    print("-" * 60)
-
-
-def _format_elapsed(seconds: float) -> str:
-    minutes = int(seconds // 60)
-    secs = int(seconds % 60)
-    if minutes > 0:
-        return f"{minutes}分{secs}秒"
-    return f"{secs}秒"
+    print_step_header(step, total, message)
 
 
 def _cleanup_video(video_path: Path, keep_video: bool):
     if keep_video:
-        print(f"\n视频文件已保留: {video_path}")
+        print_info(f"视频文件已保留: {video_path}")
         return
 
     try:
         if video_path.exists():
             file_size_mb = video_path.stat().st_size / (1024 * 1024)
             video_path.unlink()
-            print(f"\n视频文件已自动清理: {video_path.name} (释放 {file_size_mb:.1f} MB)")
+            print_success(f"视频文件已自动清理: {video_path.name} (释放 {file_size_mb:.1f} MB)")
     except Exception as e:
-        print(f"\n视频清理失败: {e}")
+        print_error(f"视频清理失败: {e}")
 
 
 def _cleanup_empty_video_dirs(output_dir: Path, safe_video_title: str) -> None:
@@ -118,20 +119,35 @@ def _select_pages(pages, page_config: Optional[str]) -> List[int]:
             if valid_indices:
                 if len(valid_indices) < len(indices):
                     invalid = [i + 1 for i in indices if i < 0 or i >= len(pages)]
-                    print(f"⚠️  警告: 忽略无效的分P编号: {invalid}")
+                    print_warning(f"忽略无效的分P编号: {invalid}")
                 return valid_indices
             else:
-                print(f"⚠️  警告: --page 参数 '{page_config}' 无效，未找到有效的分P编号")
+                print_warning(f"--page 参数 '{page_config}' 无效，未找到有效的分P编号")
         except ValueError:
-            print(f"⚠️  警告: --page 参数 '{page_config}' 格式错误，应为数字或逗号分隔的数字")
+            print_warning(f"--page 参数 '{page_config}' 格式错误，应为数字或逗号分隔的数字")
 
-    print(f"\n该视频共有 {len(pages)} 个分P:")
+    # 分P 列表用 Panel 包裹展示
+    from rich.panel import Panel
+    from rich.table import Table
+    pages_table = Table(show_header=False, box=None, padding=(0, 2))
+    pages_table.add_column(style="bold cyan", no_wrap=True, justify="right")
+    pages_table.add_column(style="white")
+    pages_table.add_column(style="dim", no_wrap=True, justify="right")
     for i, p in enumerate(pages, 1):
-        print(f"  [{i}] {p.title} ({p.duration}秒)")
+        pages_table.add_row(f"[{i}]", p.title, f"{p.duration}秒")
+    console.print()
+    console.print(Panel(
+        pages_table,
+        title=f"[bold magenta]📋 该视频共有 {len(pages)} 个分P[/]",
+        border_style="magenta",
+        padding=(0, 1),
+    ))
+    console.print()
 
     while True:
-        print("\n请输入要分析的分P编号（多个用逗号分隔，如 1,3,5），或输入 all 选择全部")
-        print("10分钟内未输入将默认选择全部")
+        print_info("请输入要分析的分P编号（多个用逗号分隔，如 1,3,5），或输入 all 选择全部")
+        print_info("10分钟内未输入将默认选择全部")
+        console.print()
 
         try:
             import platform
@@ -146,7 +162,7 @@ def _select_pages(pages, page_config: Optional[str]) -> List[int]:
                 signal.alarm(600)
 
                 try:
-                    raw = input("选择: ").strip()
+                    raw = input("[bold cyan]选择:[/] ").strip()
                 finally:
                     signal.alarm(0)
             else:
@@ -158,42 +174,42 @@ def _select_pages(pages, page_config: Optional[str]) -> List[int]:
                 def wait_and_notify():
                     _time.sleep(600)
                     if not input_done[0]:
-                        print("\n[提示] 已等待10分钟，按回车将默认选择全部")
+                        console.print("  [yellow][提示] 已等待10分钟，按回车将默认选择全部[/]")
 
                 t = Thread(target=wait_and_notify, daemon=True)
                 t.start()
-                raw = input("选择: ").strip()
+                raw = input("[bold cyan]选择:[/] ").strip()
                 input_done[0] = True
 
             if raw.lower() == "all":
                 return list(range(len(pages)))
 
             if not raw:
-                print("⚠️  输入为空，请重新输入")
+                print_warning("输入为空，请重新输入")
                 continue
 
             import re
             try:
                 indices = [int(x.strip()) - 1 for x in re.split(r"[,，]", raw)]
             except ValueError:
-                print(f"⚠️  输入 '{raw}' 格式错误，请输入数字或逗号分隔的数字")
+                print_warning(f"输入 '{raw}' 格式错误，请输入数字或逗号分隔的数字")
                 continue
 
             valid_indices = [i for i in indices if 0 <= i < len(pages)]
             if valid_indices:
                 if len(valid_indices) < len(indices):
                     invalid = [i + 1 for i in indices if i < 0 or i >= len(pages)]
-                    print(f"⚠️  忽略无效的分P编号: {invalid}")
+                    print_warning(f"忽略无效的分P编号: {invalid}")
                 return valid_indices
             else:
-                print(f"⚠️  输入 '{raw}' 无效，请输入 1-{len(pages)} 之间的编号")
+                print_warning(f"输入 '{raw}' 无效，请输入 1-{len(pages)} 之间的编号")
                 continue
 
         except TimeoutError:
-            print("\n已超时，默认选择全部分P")
+            print_warning("已超时，默认选择全部分P")
             return list(range(len(pages)))
         except Exception:
-            print("⚠️  输入无效，请重新输入")
+            print_warning("输入无效，请重新输入")
             continue
 
 
@@ -205,7 +221,7 @@ def _cleanup_audio(video_dir: Path, video_stem: str, auto_delete: bool):
         if audio_path.exists():
             file_size_mb = audio_path.stat().st_size / (1024 * 1024)
             audio_path.unlink()
-            print(f"音频文件已自动清理: {audio_path.name} (释放 {file_size_mb:.1f} MB)")
+            print_success(f"音频文件已自动清理: {audio_path.name} (释放 {file_size_mb:.1f} MB)")
             logger.info(f"音频文件已自动清理: {audio_path.name} (释放 {file_size_mb:.1f} MB)")
     except Exception as e:
         logger.warning(f"音频清理失败: {e}")
@@ -241,16 +257,16 @@ def _load_bilibili_cookie(cookie_str: str) -> Optional[Dict[str, str]]:
         from bili_analyzer.api.auth import load_cookies_netscape, PROJECT_ROOT_COOKIES_FILE
         cookies = load_cookies_netscape(PROJECT_ROOT_COOKIES_FILE)
         if cookies:
-            print(f"已从 {PROJECT_ROOT_COOKIES_FILE} 加载 B站 Cookie")
+            print_info(f"已从 {PROJECT_ROOT_COOKIES_FILE.name} 加载 B站 Cookie")
 
     if cookies:
         from bili_analyzer.api.bilibili import set_cookies
         set_cookies(cookies)
-        print(f"已加载 B站 Cookie ({len(cookies)} 项)")
+        print_success(f"已加载 B站 Cookie ({len(cookies)} 项)")
         logger.info(f"已加载 B站 Cookie ({len(cookies)} 项)")
     else:
-        print("未配置 B站 Cookie，部分功能可能受限")
-        print("  请先运行: python -m bili_analyzer --login  扫码登录")
+        print_warning("未配置 B站 Cookie，部分功能可能受限")
+        print_info("  请先运行: python -m bili_analyzer --login  扫码登录")
         logger.info("未配置 B站 Cookie")
 
     return cookies
@@ -261,7 +277,7 @@ def _save_transcript(srt_path: Path, video_dir: Path, video_stem: str) -> Path:
     transcript_text = get_full_transcript(segments, include_timestamps=False)
     transcript_path = video_dir / f"{video_stem}_字幕原文.txt"
     transcript_path.write_text(transcript_text, encoding='utf-8')
-    print(f"字幕原文已保存: {transcript_path.name}")
+    print_success(f"字幕原文已保存: {transcript_path.name}")
     return transcript_path
 
 
@@ -298,6 +314,7 @@ def _analyze_single_page(
     total_steps = 7
     video_path = None
     result = {}
+    _page_start = time.time()  # 整个分P处理的起始时间（用于最终 elapsed）
 
     # 构建输出目录和文件名，附加时间戳避免目录复用导致断点续传冲突
     if not timestamp:
@@ -351,8 +368,8 @@ def _analyze_single_page(
     logger.info(f"视频下载完成: {video_path}")
 
     step_elapsed = time.time() - step_start
-    print(f"步骤耗时: {_format_elapsed(step_elapsed)}")
-    logger.info("步骤 2 耗时: %s", _format_elapsed(step_elapsed))
+    print_step_elapsed(step_elapsed)
+    logger.info("步骤 2 耗时: %s", format_elapsed(step_elapsed))
 
     # ===== 步骤 3: 获取/转录字幕 =====
     _print_step(3 + step_offset, total_steps, f"获取字幕 - {page_info.title}")
@@ -376,7 +393,7 @@ def _analyze_single_page(
 
     # 先尝试 yt-dlp 下载字幕（sub_langs 配置决定语言优先级，中文人工优先，AI 兜底）
     ytdlp_sub_langs = config.transcriber.sub_langs
-    print(f"尝试通过 yt-dlp 下载字幕 (sub_langs={ytdlp_sub_langs})...")
+    print_info(f"尝试通过 yt-dlp 下载字幕 (sub_langs={ytdlp_sub_langs})…")
     logger.info(f"尝试通过 yt-dlp 下载字幕: {page_video_url}, sub_langs={ytdlp_sub_langs}")
 
     from bili_analyzer.transcriber.ytdlp_subtitle import YtdlpSubtitleTranscriber
@@ -389,12 +406,12 @@ def _analyze_single_page(
 
     try:
         srt_path = ytdlp_transcriber.transcribe(video_path, video_dir)
-        print("已通过 yt-dlp 获取字幕")
+        print_success("已通过 yt-dlp 获取字幕")
         logger.info("已通过 yt-dlp 获取字幕")
     except Exception as e:
         logger.warning(f"yt-dlp 字幕下载失败: {e}")
-        print(f"yt-dlp 字幕下载失败: {e}")
-        print("回退到语音识别...")
+        print_warning(f"yt-dlp 字幕下载失败: {e}")
+        print_warning("回退到语音识别…")
         logger.info("回退到语音识别")
 
         from bili_analyzer.transcriber import get_transcriber_chain
@@ -413,7 +430,7 @@ def _analyze_single_page(
         last_error = e
         for transcriber in transcriber_chain:
             try:
-                print(f"尝试使用 {transcriber.name} 转录...")
+                print_info(f"尝试使用 {transcriber.name} 转录…")
                 logger.info(f"尝试使用 {transcriber.name} 转录")
                 srt_path = transcriber.transcribe(video_path, video_dir)
                 logger.info(f"{transcriber.name} 转录成功: {srt_path}")
@@ -433,8 +450,8 @@ def _analyze_single_page(
     _save_transcript(srt_path, video_dir, video_path.stem)
 
     step_elapsed = time.time() - step_start
-    print(f"步骤耗时: {_format_elapsed(step_elapsed)}")
-    logger.info("步骤 3 耗时: %s", _format_elapsed(step_elapsed))
+    print_step_elapsed(step_elapsed)
+    logger.info("步骤 3 耗时: %s", format_elapsed(step_elapsed))
 
     # ===== 步骤 4: LLM 分析 =====
     _print_step(4 + step_offset, total_steps, f"LLM分析字幕内容 - {page_info.title}")
@@ -452,7 +469,7 @@ def _analyze_single_page(
 
     for analyzer in analyzer_chain:
         try:
-            print(f"尝试使用 {analyzer.name} 分析...")
+            print_info(f"尝试使用 {analyzer.name} 分析…")
             logger.info(f"尝试使用 {analyzer.name} 分析")
             analysis_result = analyzer.analyze(video_info_dict, srt_content)
             success_analyzer = analyzer
@@ -476,12 +493,12 @@ def _analyze_single_page(
                 json.dumps(analysis_result, ensure_ascii=False, indent=2),
                 encoding='utf-8',
             )
-            print(f"分析结果已保存: {analysis_json_path}")
+            print_success(f"分析结果已保存: {analysis_json_path}")
             break
 
     step_elapsed = time.time() - step_start
-    print(f"步骤耗时: {_format_elapsed(step_elapsed)}")
-    logger.info("步骤 4 耗时: %s", _format_elapsed(step_elapsed))
+    print_step_elapsed(step_elapsed)
+    logger.info("步骤 4 耗时: %s", format_elapsed(step_elapsed))
 
     # ===== 步骤 5: 截取关键画面 =====
     _print_step(5 + step_offset, total_steps, f"截取关键画面 - {page_info.title}")
@@ -501,8 +518,8 @@ def _analyze_single_page(
     )
 
     step_elapsed = time.time() - step_start
-    print(f"步骤耗时: {_format_elapsed(step_elapsed)}")
-    logger.info("步骤 5 耗时: %s", _format_elapsed(step_elapsed))
+    print_step_elapsed(step_elapsed)
+    logger.info("步骤 5 耗时: %s", format_elapsed(step_elapsed))
 
     # ===== 步骤 6: 生成报告 =====
     _print_step(6 + step_offset, total_steps, f"生成学习笔记 - {page_info.title}")
@@ -512,7 +529,7 @@ def _analyze_single_page(
     transcript_text = ""
     if success_analyzer:
         try:
-            print(f"使用 {success_analyzer.name} 进行字幕排版...")
+            print_info(f"使用 {success_analyzer.name} 进行字幕排版…")
             logger.info(f"使用 {success_analyzer.name} 进行字幕排版")
             transcript_text = success_analyzer.format_transcript(srt_content)
             logger.info("字幕原文语义分段排版完成")
@@ -534,8 +551,8 @@ def _analyze_single_page(
     )
 
     step_elapsed = time.time() - step_start
-    print(f"步骤耗时: {_format_elapsed(step_elapsed)}")
-    logger.info("步骤 6 耗时: %s", _format_elapsed(step_elapsed))
+    print_step_elapsed(step_elapsed)
+    logger.info("步骤 6 耗时: %s", format_elapsed(step_elapsed))
 
     # ===== 步骤 7: 清理视频 =====
     _print_step(7 + step_offset, total_steps, f"清理 - {page_info.title}")
@@ -546,8 +563,8 @@ def _analyze_single_page(
     _cleanup_video(video_path, should_keep)
 
     step_elapsed = time.time() - step_start
-    print(f"步骤耗时: {_format_elapsed(step_elapsed)}")
-    logger.info("步骤 7 耗时: %s", _format_elapsed(step_elapsed))
+    print_step_elapsed(step_elapsed)
+    logger.info("步骤 7 耗时: %s", format_elapsed(step_elapsed))
 
     result["report_path"] = report_path
     result["screenshots_dir"] = screenshots_dir
@@ -558,6 +575,8 @@ def _analyze_single_page(
     result["should_keep"] = should_keep
     result["page"] = page_info.page
     result["title"] = page_info.title
+    result["elapsed"] = format_elapsed(time.time() - _page_start)
+    result["elapsed_seconds"] = time.time() - _page_start
 
     return result
 
@@ -568,14 +587,23 @@ def run_pipeline(config: AppConfig, timestamp: str = "") -> None:
     total_start = time.time()
     _print_banner()
 
+    # 环境自检：当前 Python 是否在 conda AI 环境
+    if not check_conda_env():
+        print_warning("当前 Python 环境不是 conda 'AI'，可能出现模块缺失。详见 .trae/rules/conda-env.md")
+        logger.warning("当前 Python 环境不是 conda 'AI' 环境")
+
+    # 启动配置摘要表
+    print_config_summary(config)
+
     try:
         current_cookies = _load_bilibili_cookie(config.bilibili.cookie)
-        print("检查运行环境...")
+        print_info("检查运行环境 (FFmpeg / yt-dlp)…")
         logger.info("开始检查运行环境")
         check_ffmpeg()
         check_ytdlp()
         logger.info("运行环境检查通过")
-        print()
+        print_success("运行环境检查通过")
+        console.print()
 
         # ===== 步骤 1: 获取视频信息 =====
         _print_step(1, total_steps, "获取视频信息")
@@ -583,46 +611,53 @@ def run_pipeline(config: AppConfig, timestamp: str = "") -> None:
         step_start = time.time()
 
         bvid = extract_bvid(config.video_url)
-        print(f"BV号: {bvid}")
+        print_info(f"BV号: {bvid}")
 
         video_info = get_video_info(bvid)
-        print(f"标题: {video_info.title}")
-        print(f"UP主: {video_info.owner}")
-        print(f"时长: {video_info.duration}秒")
         logger.info(f"视频信息: BV号={bvid}, 标题={video_info.title}, UP主={video_info.owner}, 时长={video_info.duration}秒")
 
         output_dir = Path(config.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"输出目录: {output_dir.resolve()}")
-        print(f"输出目录: {output_dir.resolve()}")
+        print_info(f"输出目录: {output_dir.resolve()}")
 
         reports_dir = output_dir / "reports"
         reports_dir.mkdir(parents=True, exist_ok=True)
 
-        # 获取分P列表并选择
+        # 获取分P列表
         pages = get_pages(bvid)
+
+        # 视频信息卡片（Panel 展示）
+        print_video_card(video_info, pages)
+
+        # 分P选择
         selected_indices = _select_pages(pages, config.page)
         selected_pages = [pages[i] for i in selected_indices]
 
         if len(pages) > 1:
-            print(f"\n已选择 {len(selected_pages)} 个分P进行分析")
+            console.print()
+            console.print(f"  [bold cyan]已选择 {len(selected_pages)} 个分P进行分析:[/]")
             for p in selected_pages:
-                print(f"  - 第{p.page}P: {p.title} ({p.duration}秒)")
+                console.print(f"    [cyan]•[/] 第{p.page}P: [green]{p.title}[/] [dim]({p.duration}秒)[/]")
 
         safe_video_title = _safe_dirname(video_info.title)
 
         step_elapsed = time.time() - step_start
-        print(f"步骤耗时: {_format_elapsed(step_elapsed)}")
-        logger.info("步骤 1 耗时: %s", _format_elapsed(step_elapsed))
+        print_step_elapsed(step_elapsed)
+        logger.info("步骤 1 耗时: %s", format_elapsed(step_elapsed))
 
         # 对每个选中的分P进行分析
         all_results = []
         failed_pages = []
         for idx, page_info in enumerate(selected_pages):
             if len(selected_pages) > 1:
-                print(f"\n{'=' * 60}")
-                print(f"开始分析第 {idx + 1}/{len(selected_pages)} 个分P: {page_info.title}")
-                print(f"{'=' * 60}")
+                console.print()
+                console.rule(
+                    f"[bold magenta]开始分析第 {idx + 1}/{len(selected_pages)} 个分P:[/] [green]{page_info.title}[/]",
+                    align="left",
+                    style="magenta",
+                )
+                console.print()
 
             step_offset = 0
             try:
@@ -649,56 +684,80 @@ def run_pipeline(config: AppConfig, timestamp: str = "") -> None:
         _cleanup_empty_video_dirs(output_dir, safe_video_title)
 
         # ===== 完成 =====
-        print("\n" + "=" * 60)
-        print("分析完成!")
-        print("=" * 60)
+        console.print()
+        console.rule("[bold green]✅ 分析完成[/]", align="left", style="green")
+        console.print()
 
         if all_results:
-            if len(pages) == 1:
-                print("\n分析成功:")
-            else:
-                print("\n分析成功的分P:")
-            for result in all_results:
+            # 准备汇总表格数据
+            table_rows = []
+            for r in all_results:
+                # 计算截图数：从 video_dir/screenshots 下数 jpg
+                screenshots_dir = r.get("screenshots_dir")
+                screenshot_count = 0
+                if screenshots_dir and screenshots_dir.exists():
+                    screenshot_count = len(list(screenshots_dir.glob("*.jpg")))
+                table_rows.append({
+                    "page": f"P{r['page']}" if len(pages) > 1 else "单P",
+                    "title": r.get("title", ""),
+                    "report": str(r.get("report_path", "")),
+                    "screenshots": screenshot_count,
+                    "elapsed": r.get("elapsed", ""),
+                })
+            print_summary_table(table_rows)
+
+            # 详细路径列表（路径太长，单独放在 Table 之后用嵌套结构展示）
+            console.print()
+            console.print("  [bold cyan]📂 详细产物路径:[/]")
+            for r in all_results:
                 if len(pages) > 1:
-                    print(f"\n第{result['page']}P: {result['title']}")
+                    console.print(f"    [bold]第{r['page']}P:[/] [green]{r.get('title','')}[/]")
                 else:
-                    print(f"\n视频: {result['title']}")
-                print(f"  报告路径: {result['report_path']}")
-                print(f"  截图目录: {result['screenshots_dir']}")
-                print(f"  字幕文件: {result['srt_path']}")
-                print(f"  字幕原文: {result['transcript_path']}")
-                if result["should_keep"] and result["video_path"]:
-                    print(f"  视频文件: {result['video_path']}")
+                    console.print(f"    [bold]视频:[/] [green]{r.get('title','')}[/]")
+                console.print(f"      [blue]📄 报告:[/]   {r.get('report_path')}")
+                console.print(f"      [magenta]🖼  截图:[/]   {r.get('screenshots_dir')}")
+                console.print(f"      [yellow]📝 字幕:[/]   {r.get('srt_path')}")
+                console.print(f"      [yellow]📄 原文:[/]   {r.get('transcript_path')}")
+                if r.get("should_keep") and r.get("video_path"):
+                    console.print(f"      [red]🎬 视频:[/]   {r.get('video_path')}")
+                console.print()
+
+            # 产物目录树（多P 时按 P1/P2/... 分别展示；单P 时只展示一次）
+            for r in all_results:
+                video_dir = r.get("video_dir")
+                if video_dir and video_dir.exists():
+                    print_output_tree(video_dir)
 
         if failed_pages:
-            if len(pages) == 1:
-                print("\n分析失败:")
-            else:
-                print("\n分析失败的分P:")
+            console.print()
+            console.print("  [bold red]❌ 分析失败的分P:[/]")
             for page_info, error_msg in failed_pages:
                 if len(pages) > 1:
-                    print(f"  第{page_info.page}P: {page_info.title} - {error_msg}")
+                    console.print(f"    [red]✖[/] 第{page_info.page}P: {page_info.title} — {error_msg}")
                 else:
-                    print(f"  {page_info.title} - {error_msg}")
+                    console.print(f"    [red]✖[/] {page_info.title} — {error_msg}")
+            console.print()
 
         total_elapsed = time.time() - total_start
-        print(f"\n总运行时间: {_format_elapsed(total_elapsed)}")
-        logger.info(f"总运行时间: {_format_elapsed(total_elapsed)}")
+        print_step_elapsed(total_elapsed)
+        console.print(f"  [dim]⏱  总运行时间:[/] [bold cyan]{format_elapsed(total_elapsed)}[/]")
+        logger.info(f"总运行时间: {format_elapsed(total_elapsed)}")
 
         if failed_pages and not all_results:
             raise RuntimeError(f"所有分P分析均失败，共 {len(failed_pages)} 个分P")
 
     except KeyboardInterrupt:
         total_elapsed = time.time() - total_start
-        print(f"已运行时间: {_format_elapsed(total_elapsed)}")
-        logger.info(f"异常时已运行时间: {_format_elapsed(total_elapsed)}")
-        print("\n\n用户中断")
+        console.print()
+        console.print(f"  [bold yellow]⚠  用户中断[/] (已运行 [cyan]{format_elapsed(total_elapsed)}[/])")
         logger.warning("用户中断")
         raise
     except Exception as e:
         total_elapsed = time.time() - total_start
-        print(f"已运行时间: {_format_elapsed(total_elapsed)}")
-        logger.info(f"异常时已运行时间: {_format_elapsed(total_elapsed)}")
-        print(f"\n\n错误: {e}")
+        console.print()
+        console.print(f"  [bold red]✖ 运行出错[/] (已运行 [cyan]{format_elapsed(total_elapsed)}[/]): {e}")
         logger.error(f"运行出错: {e}", exc_info=True)
+        # 打印带语法高亮的 traceback
+        from bili_analyzer.ui.console import print_exception
+        print_exception(show_locals=False)
         raise

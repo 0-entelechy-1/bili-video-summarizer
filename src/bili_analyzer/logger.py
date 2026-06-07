@@ -49,19 +49,33 @@ def setup_logger(log_dir: str = "", timestamp: str = "") -> logging.Logger:
     if logger.handlers:
         return logger
 
-    formatter = logging.Formatter(
+    # 文件 handler：保留完整格式（无 ANSI 颜色，方便 grep / 归档）
+    file_formatter = logging.Formatter(
         fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-
     file_handler = logging.FileHandler(str(log_file), encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
+    file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
 
-    console_handler = logging.StreamHandler(sys.stderr)
-    console_handler.setLevel(logging.WARNING)
-    console_handler.setFormatter(formatter)
+    # 控制台 handler：升级为 RichHandler，输出彩色 + 高亮 traceback
+    # INFO 级别及以上的常规日志通过 console 显示，让用户能实时看到流程进展
+    # 局部 import 避免 logger 模块成为 ui 模块的循环依赖入口
+    from rich.logging import RichHandler
+    from bili_analyzer.ui.console import console
+
+    console_handler = RichHandler(
+        console=console,
+        level=logging.INFO,
+        show_path=False,
+        show_time=True,
+        show_level=True,
+        markup=True,
+        rich_tracebacks=True,
+        tracebacks_show_locals=False,
+    )
+    console_handler.setFormatter(logging.Formatter("%(message)s"))
     logger.addHandler(console_handler)
 
     threading.excepthook = _thread_excepthook

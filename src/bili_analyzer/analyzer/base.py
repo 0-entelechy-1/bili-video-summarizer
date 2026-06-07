@@ -276,4 +276,5 @@ class BaseAnalyzer(ABC):
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
-        print(f"分析结果已保存: {output_path}")
+        from bili_analyzer.ui.console import print_success
+        print_success(f"分析结果已保存: {output_path}")

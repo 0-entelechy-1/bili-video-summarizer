@@ -179,9 +179,14 @@ def generate_markdown(
 
     kp_count = len(knowledge_points)
     file_size = report_path.stat().st_size / 1024
-    print(f"\n学习笔记已生成: {report_path}")
-    print(f"  文件大小: {file_size:.2f} KB")
-    print(f"  知识点数: {kp_count}")
-    print(f"  截图数: {len(screenshots)}")
+
+    from bili_analyzer.ui.console import print_info, print_markdown_preview, print_success
+    print_success(f"学习笔记已生成: {report_path}")
+    print_info(f"  文件大小: {file_size:.2f} KB")
+    print_info(f"  知识点数: {kp_count}")
+    print_info(f"  截图数: {len(screenshots)}")
+
+    # 终端 Markdown 预览（前 30 行）
+    print_markdown_preview(report_path, lines=30)
 
     return report_path

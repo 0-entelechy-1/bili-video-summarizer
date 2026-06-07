@@ -9,12 +9,15 @@
 import logging
 import shutil
 import subprocess
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-from tqdm import tqdm
+from bili_analyzer.ui.console import (
+    make_progress,
+    print_success,
+    print_warning,
+)
 
 logger = logging.getLogger("bili_analyzer")
 
@@ -44,7 +47,7 @@ def check_ffmpeg() -> bool:
             encoding='utf-8', errors='replace',
         )
         if result.returncode == 0:
-            print("FFmpeg: 已安装")
+            print_success("FFmpeg: 已安装")
             return True
         raise RuntimeError("FFmpeg 执行失败")
     except subprocess.TimeoutExpired:
@@ -145,45 +148,66 @@ def batch_capture(
     screenshot_mapping = {}
     failed_count = 0
 
-    pbar = tqdm(total=len(tasks), desc="截取关键画面", unit="张", file=sys.stdout, dynamic_ncols=True, miniters=1) if show_progress else None
+    progress_ctx = make_progress() if show_progress else _NullProgress()
+    with progress_ctx as progress:
+        if show_progress:
+            task_id = progress.add_task(f"🖼  截取关键画面", total=len(tasks))
+        else:
+            task_id = None
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_task = {
-            executor.submit(
-                capture_screenshot, video_path,
-                task['timestamp'], task['output_path'], quality
-            ): task
-            for task in tasks
-        }
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_task = {
+                executor.submit(
+                    capture_screenshot, video_path,
+                    task['timestamp'], task['output_path'], quality
+                ): task
+                for task in tasks
+            }
 
-        for future in as_completed(future_to_task):
-            task = future_to_task[future]
-            try:
-                success = future.result()
-                if success:
-                    screenshot_mapping[task['timestamp']] = task['output_path']
-                else:
+            for future in as_completed(future_to_task):
+                task = future_to_task[future]
+                try:
+                    success = future.result()
+                    if success:
+                        screenshot_mapping[task['timestamp']] = task['output_path']
+                    else:
+                        failed_count += 1
+                        logger.warning(
+                            "截图失败: timestamp=%.2fs, video=%s, output=%s",
+                            task['timestamp'], video_path, task['output_path']
+                        )
+                except Exception as e:
                     failed_count += 1
                     logger.warning(
-                        "截图失败: timestamp=%.2fs, video=%s, output=%s",
-                        task['timestamp'], video_path, task['output_path']
+                        "截图异常: timestamp=%.2fs, video=%s, output=%s, error=%s",
+                        task['timestamp'], video_path, task['output_path'], e
                     )
-            except Exception as e:
-                failed_count += 1
-                logger.warning(
-                    "截图异常: timestamp=%.2fs, video=%s, output=%s, error=%s",
-                    task['timestamp'], video_path, task['output_path'], e
-                )
 
-            if pbar:
-                pbar.update(1)
-
-    if pbar:
-        pbar.close()
+                if task_id is not None:
+                    progress.update(task_id, advance=1)
 
     summary = f"截图完成: 成功 {len(screenshot_mapping)} 张" \
               + (f"，失败 {failed_count} 张" if failed_count > 0 else "")
-    print(f"\n{summary}")
+    if failed_count > 0:
+        print_warning(summary)
+    else:
+        print_success(summary)
     logger.info(summary)
 
     return screenshot_mapping
+
+
+class _NullProgress:
+    """show_progress=False 时的空 Progress 占位符（with 协议兼容）"""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def add_task(self, *args, **kwargs):
+        return None
+
+    def update(self, *args, **kwargs):
+        pass

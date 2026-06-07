@@ -8,6 +8,9 @@ import sys
 import re
 from typing import Any, Dict
 
+from rich.panel import Panel
+from rich.syntax import Syntax
+
 from bili_analyzer.analyzer.base import (
     BaseAnalyzer,
     build_analysis_prompt,
@@ -16,6 +19,12 @@ from bili_analyzer.analyzer.base import (
     validate_analysis_result,
 )
 from bili_analyzer.parser.srt import parse_srt_file, get_full_transcript
+from bili_analyzer.ui.console import (
+    console,
+    print_info,
+    print_success,
+    spinner,
+)
 
 
 class InteractiveAnalyzer(BaseAnalyzer):
@@ -29,24 +38,33 @@ class InteractiveAnalyzer(BaseAnalyzer):
         """交互式分析：输出 prompt，等待用户粘贴 LLM 返回的 JSON"""
         prompt = build_analysis_prompt(video_info, srt_content)
 
-        print("\n" + "=" * 70)
-        print("LLM 分析 Prompt")
-        print("=" * 70)
-        print("\n请将以下内容复制并发送给 LLM (如 DeepSeek、Claude、GPT-4 等):\n")
-        print(prompt)
-        print("\n" + "=" * 70)
-        print("等待 LLM 响应")
-        print("=" * 70)
-        print("\n请将 LLM 返回的 JSON 结果粘贴到下方，然后:")
-        print("  - Windows: 按 回车然后 Ctrl+Z 最后再回车")
-        print("  - macOS/Linux: 按 Ctrl+D")
-        print("\n开始输入:")
-        print("-" * 70)
+        console.print()
+        console.rule("[bold magenta]LLM 分析 Prompt[/]", align="left", style="magenta")
+        console.print()
+        console.print(
+            "  [cyan]请将下方内容复制并发送给 LLM（如 DeepSeek、Claude、GPT-4 等）[/]"
+        )
+        console.print()
+
+        # 把 prompt 用 syntax 高亮（markdown 风格）显示
+        syntax = Syntax(prompt, "markdown", theme="monokai", word_wrap=True, background_color="default")
+        console.print(syntax)
+        console.print()
+
+        console.rule("[bold magenta]等待 LLM 响应[/]", align="left", style="magenta")
+        console.print()
+        console.print("  [cyan]请将 LLM 返回的 JSON 结果粘贴到下方，然后:[/]")
+        console.print("    [dim]• Windows: 按 回车然后 Ctrl+Z 最后再回车[/]")
+        console.print("    [dim]• macOS / Linux: 按 Ctrl+D[/]")
+        console.print()
+        console.print("  [bold]开始输入:[/]")
+        console.print("─" * 60, style="dim")
 
         lines = []
         try:
-            for line in sys.stdin:
-                lines.append(line)
+            with spinner("等待 LLM 响应（Ctrl+D/Z 结束输入）…"):
+                for line in sys.stdin:
+                    lines.append(line)
         except KeyboardInterrupt:
             raise ValueError("用户取消输入")
 
@@ -54,13 +72,13 @@ class InteractiveAnalyzer(BaseAnalyzer):
         if not response:
             raise ValueError("未收到任何输入")
 
-        print("-" * 70)
-        print(f"已接收 {len(response)} 字符的响应")
+        console.print("─" * 60, style="dim")
+        print_info(f"已接收 {len(response)} 字符的响应")
 
         result = parse_llm_response(response)
         validate_analysis_result(result)
 
-        print("分析结果验证通过")
+        print_success("分析结果验证通过")
         return result
 
     def format_transcript(self, srt_content: str) -> str:

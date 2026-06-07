@@ -1,5 +1,6 @@
 """DeepSeek API 分析器"""
 
+import time
 from typing import Any, Dict
 
 from bili_analyzer.analyzer.base import (
@@ -9,6 +10,11 @@ from bili_analyzer.analyzer.base import (
     normalize_transcript_format,
     parse_llm_response,
     validate_analysis_result,
+)
+from bili_analyzer.ui.console import (
+    print_info,
+    print_success,
+    spinner,
 )
 
 
@@ -32,36 +38,40 @@ class DeepseekAnalyzer(BaseAnalyzer):
 
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
-        print(f"正在调用 DeepSeek API (模型: {self.model})...")
-        print("  这可能需要30-120秒，请耐心等待...")
-
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "你是一位专业的学术内容分析专家。"
-                        "请严格按照要求的 JSON 格式返回分析结果,"
-                        "不要包含任何其他文字、解释或 markdown 标记。"
-                        "直接输出纯 JSON 对象。"
-                    )
-                },
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-            max_tokens=8192,
-            response_format={"type": "json_object"},
-        )
+        with spinner(f"调用 DeepSeek API ({self.model}) 中…  30-120 秒，请耐心等待") as sp:
+            _t0 = time.time()
+            try:
+                response = client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是一位专业的学术内容分析专家。"
+                                "请严格按照要求的 JSON 格式返回分析结果,"
+                                "不要包含任何其他文字、解释或 markdown 标记。"
+                                "直接输出纯 JSON 对象。"
+                            )
+                        },
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=8192,
+                    response_format={"type": "json_object"},
+                )
+            finally:
+                sp.update(
+                    f"调用 DeepSeek API 完成（耗时 {int(time.time() - _t0)}s），正在解析结果…"
+                )
 
         content = response.choices[0].message.content
 
         result = parse_llm_response(content)
         validate_analysis_result(result)
 
-        print(f"DeepSeek 分析完成")
-        print(f"  知识点: {len(result.get('knowledge_points', []))} 个")
-        print(f"  关键截图: {len(result.get('key_screenshots', []))} 个")
+        print_success("DeepSeek 分析完成")
+        print_info(f"  知识点: {len(result.get('knowledge_points', []))} 个")
+        print_info(f"  关键截图: {len(result.get('key_screenshots', []))} 个")
 
         return result
 
@@ -72,23 +82,28 @@ class DeepseekAnalyzer(BaseAnalyzer):
 
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
-        print("正在调用 LLM 进行字幕分段排版...")
-
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "你是一位专业的文字排版专家。"
-                        "请按照要求的格式对字幕进行语义分段排版,"
-                        "直接输出排版后的纯文本,不要包含任何解释或额外标记。"
-                    )
-                },
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-            max_tokens=8192,
-        )
+        with spinner("调用 DeepSeek API 进行字幕分段排版…") as sp:
+            _t0 = time.time()
+            try:
+                response = client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是一位专业的文字排版专家。"
+                                "请按照要求的格式对字幕进行语义分段排版,"
+                                "直接输出排版后的纯文本,不要包含任何解释或额外标记。"
+                            )
+                        },
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=8192,
+                )
+            finally:
+                sp.update(
+                    f"DeepSeek 字幕排版完成（耗时 {int(time.time() - _t0)}s）"
+                )
 
         return normalize_transcript_format(response.choices[0].message.content)

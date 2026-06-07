@@ -2,10 +2,16 @@
 
 import logging
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional
 
 from bili_analyzer.transcriber.base import BaseTranscriber
+from bili_analyzer.ui.console import (
+    print_info,
+    print_success,
+    spinner,
+)
 
 
 class WhisperTranscriber(BaseTranscriber):
@@ -65,34 +71,40 @@ class WhisperTranscriber(BaseTranscriber):
 
         local_model = self._find_local_model()
         if local_model:
-            print(f"正在从本地加载 Whisper 模型: {local_model.name}...")
+            print_info(f"正在从本地加载 Whisper 模型: {local_model.name}…")
             logging.getLogger("whisper").setLevel(logging.WARNING)
             whisper_model = whisper.load_model(str(local_model))
         else:
             cached_model = self._find_cached_model()
             if cached_model:
-                print(f"正在从缓存加载模型: {cached_model.name}")
+                print_info(f"正在从缓存加载模型: {cached_model.name}")
                 logging.getLogger("whisper").setLevel(logging.WARNING)
                 whisper_model = whisper.load_model(self.model)
             else:
-                print(f"正在使用 Whisper ({self.model}) 转录...")
-                print("提示: 本地未找到模型文件，将从网络下载")
-                print(f"  下载地址: {self._get_model_download_url()}")
-                print(f"  缓存目录: {self._get_whisper_cache_dir()}")
+                print_info(f"正在使用 Whisper ({self.model}) 转录…")
+                print_info("提示: 本地未找到模型文件，将从网络下载")
+                print_info(f"  下载地址: {self._get_model_download_url()}")
+                print_info(f"  缓存目录: {self._get_whisper_cache_dir()}")
                 logging.getLogger("whisper").setLevel(logging.WARNING)
                 whisper_model = whisper.load_model(self.model)
 
-        print("正在进行语音识别，请耐心等待...")
-        result = whisper_model.transcribe(
-            str(audio_path),
-            language="zh",
-            verbose=False,
-        )
+        # 长任务包 spinner：显示累计等待时间
+        # openai-whisper 没有 progress callback API；spinner + 累计时间是唯一可行的轻量方案
+        with spinner(f"Whisper({self.model}) 语音识别中…") as sp:
+            _t0 = time.time()
+            result = whisper_model.transcribe(
+                str(audio_path),
+                language="zh",
+                verbose=False,
+            )
+            sp.update(
+                f"Whisper({self.model}) 识别完成（耗时 {int(time.time() - _t0)}s），正在写入 SRT…"
+            )
 
         srt_path = output_dir / f"{video_path.stem}.srt"
         self._write_srt(result["segments"], srt_path)
 
-        print(f"语音识别完成: {srt_path.name}")
+        print_success(f"语音识别完成: {srt_path.name}")
         return srt_path
 
     def _extract_audio(self, video_path: Path, audio_path: Path) -> None:

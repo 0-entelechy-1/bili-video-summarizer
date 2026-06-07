@@ -61,5 +61,6 @@ class YtdlpSubtitleTranscriber(BaseTranscriber):
         if srt_path is None:
             raise RuntimeError("该视频无yt-dlp可下载的字幕")
 
-        print(f"yt-dlp字幕已保存: {srt_path.name}")
+        from bili_analyzer.ui.console import print_success
+        print_success(f"yt-dlp 字幕已保存: {srt_path.name}")
         return srt_path

@@ -201,11 +201,13 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         yaml_path = _find_config_file()
 
     if yaml_path:
-        print(f"加载配置文件: {yaml_path.resolve()}")
+        from bili_analyzer.ui.console import print_info, print_warning
+        print_info(f"加载配置文件: {yaml_path.resolve()}")
         data = _load_yaml_config(yaml_path)
         config = _dict_to_config(data)
     else:
-        print("警告: 未找到配置文件，使用默认配置")
+        from bili_analyzer.ui.console import print_warning
+        print_warning("未找到配置文件，使用默认配置")
         config = AppConfig()
 
     # 2. 环境变量覆盖

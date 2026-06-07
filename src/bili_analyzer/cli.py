@@ -99,6 +99,13 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--no-color",
+        action="store_true",
+        default=False,
+        help="禁用终端颜色（用于管道/重定向/CI 环境）"
+    )
+
+    parser.add_argument(
         "--version", "-v",
         action="version",
         version="%(prog)s 1.0.0"
@@ -109,8 +116,19 @@ def create_parser() -> argparse.ArgumentParser:
 
 def main():
     """CLI 主入口"""
+    # --no-color 必须在导入 bili_analyzer 之前处理（关闭 Rich 颜色）
+    # 局部导入 ui.console 以便设置 NO_COLOR 环境变量
+    from bili_analyzer.ui.console import is_no_color
+    is_no_color()
+
     parser = create_parser()
     args = parser.parse_args()
+
+    from bili_analyzer.ui.console import (
+        console,
+        print_error,
+        print_warning,
+    )
 
     # 扫码登录模式
     if args.login:
@@ -121,14 +139,14 @@ def main():
     # 检查 video_url 是否提供
     if not args.video_url:
         parser.print_help()
-        print("\n错误: 必须提供视频链接或BV号")
+        print_error("必须提供视频链接或BV号")
         sys.exit(1)
 
     # 加载配置
     try:
         config = load_config(args.config_path)
     except FileNotFoundError as e:
-        print(f"错误: {e}")
+        print_error(f"配置文件加载失败: {e}")
         sys.exit(1)
 
     # 命令行参数覆盖
@@ -154,12 +172,12 @@ def main():
     try:
         run_pipeline(config, timestamp=run_timestamp)
     except KeyboardInterrupt:
-        print("\n\n用户中断")
+        print_warning("用户中断")
         sys.exit(1)
     except Exception as e:
-        print(f"\n\n错误: {e}")
-        import traceback
-        traceback.print_exc()
+        # 用 Rich 高亮 traceback（pipeline.py 内部已经 print_exception 过一次，
+        # 这里只打印精简版最终错误信息，避免重复堆栈）
+        console.print(f"  [bold red]✖ 顶层错误:[/] {e}")
         sys.exit(1)
 
 

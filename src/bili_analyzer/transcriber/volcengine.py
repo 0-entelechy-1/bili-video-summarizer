@@ -8,6 +8,7 @@ from pathlib import Path
 import requests
 
 from bili_analyzer.transcriber.base import BaseTranscriber
+from bili_analyzer.ui.console import print_info, print_warning
 
 
 class VolcengineTranscriber(BaseTranscriber):
@@ -44,10 +45,11 @@ class VolcengineTranscriber(BaseTranscriber):
         if not audio_path.exists():
             self._extract_audio(video_path, audio_path)
 
-        print("正在使用火山引擎语音识别...")
+        print_info("正在使用火山引擎语音识别…")
 
         # 提交转录任务
         task_id = self._submit(audio_path)
+        print_info(f"转录任务已提交: {task_id}")
 
         # 轮询结果
         result = self._poll(task_id)
@@ -56,7 +58,7 @@ class VolcengineTranscriber(BaseTranscriber):
         srt_path = output_dir / f"{video_path.stem}.srt"
         self._write_srt(result, srt_path)
 
-        print(f"火山引擎语音识别完成: {srt_path.name}")
+        print_success(f"火山引擎语音识别完成: {srt_path.name}")
         return srt_path
 
     def _extract_audio(self, video_path: Path, audio_path: Path) -> None:
@@ -89,32 +91,36 @@ class VolcengineTranscriber(BaseTranscriber):
             raise RuntimeError(f"火山引擎提交失败: {data.get('message', '未知错误')}")
 
         task_id = data["id"]
-        print(f"  转录任务已提交: {task_id}")
         return task_id
 
     def _poll(self, task_id: str, max_wait: int = 300) -> dict:
-        """轮询转录结果"""
+        """轮询转录结果（带 spinner 实时显示等待时长）"""
         start_time = time.time()
 
-        while time.time() - start_time < max_wait:
-            resp = requests.get(
-                f"https://openspeech.bytedance.com/api/v1/vc/query"
-                f"?appid={self.appid}&id={task_id}",
-                headers={"Authorization": f"Bearer;{self.token}"},
-                timeout=30,
-            )
+        with spinner("火山引擎处理中…") as sp:
+            while time.time() - start_time < max_wait:
+                resp = requests.get(
+                    f"https://openspeech.bytedance.com/api/v1/vc/query"
+                    f"?appid={self.appid}&id={task_id}",
+                    headers={"Authorization": f"Bearer;{self.token}"},
+                    timeout=30,
+                )
 
-            data = resp.json()
-            code = data.get("code")
+                data = resp.json()
+                code = data.get("code")
 
-            if code == 0:
-                return data
-            elif code == 2000:
-                # 处理中
-                print("  正在处理中，请等待...")
-                time.sleep(5)
-            else:
-                raise RuntimeError(f"火山引擎语音识别失败: {data.get('message', '未知错误')}")
+                elapsed = int(time.time() - start_time)
+                sp.update(
+                    f"火山引擎处理中…  已等待 {elapsed}s / {max_wait}s"
+                )
+
+                if code == 0:
+                    return data
+                elif code == 2000:
+                    # 处理中
+                    time.sleep(5)
+                else:
+                    raise RuntimeError(f"火山引擎语音识别失败: {data.get('message', '未知错误')}")
 
         raise RuntimeError("火山引擎语音识别超时")
 
