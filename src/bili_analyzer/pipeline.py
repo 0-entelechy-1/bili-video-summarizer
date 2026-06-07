@@ -373,19 +373,32 @@ def _analyze_single_page(
         "page": page_info.page,
     }
 
-    from bili_analyzer.transcriber.cc_subtitle import CCSubtitleTranscriber
-    cc_transcriber = CCSubtitleTranscriber(bvid=bvid, prefer_language="zh", cid=page_info.cid, cookies=cookies, aid=video_info.aid, duration=page_info.duration)
+    # 先尝试 yt-dlp 下载字幕（sub_langs 配置决定语言优先级，中文人工优先，AI 兜底）
+    ytdlp_sub_langs = config.transcriber.sub_langs
+    print(f"尝试通过 yt-dlp 下载字幕 (sub_langs={ytdlp_sub_langs})...")
+    logger.info(f"尝试通过 yt-dlp 下载字幕: {page_video_url}, sub_langs={ytdlp_sub_langs}")
 
-    if cc_transcriber.has_subtitle():
-        print("检测到CC字幕，跳过语音识别")
-        logger.info("检测到CC字幕，使用CC字幕")
-        srt_path = cc_transcriber.transcribe(video_path, video_dir)
-    else:
-        print("未检测到CC字幕，使用语音识别")
-        logger.info("未检测到CC字幕，使用语音识别")
+    from bili_analyzer.transcriber.ytdlp_subtitle import YtdlpSubtitleTranscriber
+    ytdlp_transcriber = YtdlpSubtitleTranscriber(
+        video_url=page_video_url,
+        sub_langs=ytdlp_sub_langs,
+        cookies=cookies,
+    )
+
+    try:
+        srt_path = ytdlp_transcriber.transcribe(video_path, video_dir)
+        print("已通过 yt-dlp 获取字幕")
+        logger.info("已通过 yt-dlp 获取字幕")
+    except Exception as e:
+        logger.warning(f"yt-dlp 字幕下载失败: {e}")
+        print(f"yt-dlp 字幕下载失败: {e}")
+        print("回退到语音识别...")
+        logger.info("回退到语音识别")
 
         from bili_analyzer.transcriber import get_transcriber_chain
-        transcriber_chain = get_transcriber_chain(config, bvid, cid=page_info.cid, aid=video_info.aid, cookies=cookies, duration=page_info.duration, skip_cc=True)
+        transcriber_chain = get_transcriber_chain(
+            config, bvid, page_num=page_info.page, cookies=cookies,
+        )
 
         if not transcriber_chain:
             raise RuntimeError(
@@ -395,7 +408,7 @@ def _analyze_single_page(
                 "  - 配置火山引擎 API (在线转录)\n"
             )
 
-        last_error = None
+        last_error = e
         for transcriber in transcriber_chain:
             try:
                 print(f"尝试使用 {transcriber.name} 转录...")
@@ -403,9 +416,9 @@ def _analyze_single_page(
                 srt_path = transcriber.transcribe(video_path, video_dir)
                 logger.info(f"{transcriber.name} 转录成功: {srt_path}")
                 break
-            except Exception as e:
-                logger.warning(f"{transcriber.name} 转录失败: {e}")
-                last_error = e
+            except Exception as ex:
+                logger.warning(f"{transcriber.name} 转录失败: {ex}")
+                last_error = ex
                 continue
         else:
             raise RuntimeError("所有转录方式均失败") from last_error

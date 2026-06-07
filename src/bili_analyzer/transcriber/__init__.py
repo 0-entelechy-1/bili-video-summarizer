@@ -1,17 +1,15 @@
 """转录器工厂
 
-按优先级选择转录方式：CC 字幕 → 配置指定 → 降级
+按优先级选择转录方式：yt-dlp 字幕 → 配置指定的语音识别链
 """
 
-from pathlib import Path
 from typing import Dict, Optional
 
 from bili_analyzer.config import AppConfig
-from bili_analyzer.transcriber.base import BaseTranscriber
-from bili_analyzer.transcriber.cc_subtitle import CCSubtitleTranscriber
 
 
-def create_transcriber(config: AppConfig, bvid: str, prefer_language: str = "zh") -> BaseTranscriber:
+def create_transcriber(config: AppConfig, bvid: str, prefer_language: str = "zh"):
+    """创建单个转录器实例（兼容旧 API）"""
     prefer = config.transcriber.prefer
 
     if prefer == "whisper":
@@ -28,36 +26,35 @@ def create_transcriber(config: AppConfig, bvid: str, prefer_language: str = "zh"
             appid=config.transcriber.volcengine.appid,
         )
 
-    if prefer == "auto":
-        return CCSubtitleTranscriber(bvid=bvid, prefer_language=prefer_language)
-
-    return CCSubtitleTranscriber(bvid=bvid, prefer_language=prefer_language)
+    raise ValueError(
+        f"不支持的转录方式: {prefer}。"
+        "请使用 get_transcriber_chain() 获取转录链，"
+        "yt-dlp 字幕下载已由 pipeline.py 单独处理。"
+    )
 
 
 def get_transcriber_chain(
     config: AppConfig,
     bvid: str,
-    cid: Optional[int] = None,
-    aid: Optional[int] = None,
+    page_num: int = 1,
     cookies: Optional[Dict[str, str]] = None,
-    duration: Optional[int] = None,
-    skip_cc: bool = False,
 ) -> list:
+    """构造语音识别转录链（兜底链，不含 yt-dlp 字幕节点）
+
+    yt-dlp 字幕下载由 pipeline.py 在调用本链之前单独尝试，
+    本链只用于 yt-dlp 失败后的语音识别兜底。
+
+    Args:
+        config: 应用配置
+        bvid: BV 号（保留参数以便未来扩展）
+        page_num: 分P序号（保留参数以便未来扩展）
+        cookies: B站 Cookie 字典（保留参数以便未来扩展）
+
+    Returns:
+        list: 转录器实例列表，按优先级排序
+    """
     chain = []
-
     prefer = config.transcriber.prefer
-
-    # CC 字幕不需要额外配置，作为保底选项加入链中
-    # 如果调用方已经检测过 CC 字幕且确认没有，可设置 skip_cc=True 避免重复请求
-    if not skip_cc:
-        chain.append(CCSubtitleTranscriber(
-            bvid=bvid,
-            prefer_language="zh",
-            cid=cid,
-            aid=aid,
-            cookies=cookies,
-            duration=duration,
-        ))
 
     if prefer in ("auto", "volcengine"):
         if config.transcriber.volcengine.token and config.transcriber.volcengine.appid:

@@ -15,6 +15,7 @@ llm:
 # 转录配置
 transcriber:
   prefer: auto             # 可选: auto / whisper / volcengine
+  sub_langs: zh-CN,zh-Hans,zh-TW,ai-zh  # yt-dlp 字幕语言列表（逗号分隔），中文人工优先，AI 兜底
   whisper:
     model: medium          # tiny/base/small/medium/large
     model_path: ./model    # 本地模型目录，放置模型文件后优先从此目录加载
