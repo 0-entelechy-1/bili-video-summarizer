@@ -4,7 +4,7 @@
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from bili_analyzer.config import AppConfig
 from bili_analyzer.transcriber.base import BaseTranscriber
@@ -34,13 +34,30 @@ def create_transcriber(config: AppConfig, bvid: str, prefer_language: str = "zh"
     return CCSubtitleTranscriber(bvid=bvid, prefer_language=prefer_language)
 
 
-def get_transcriber_chain(config: AppConfig, bvid: str, cid: Optional[int] = None) -> list:
+def get_transcriber_chain(
+    config: AppConfig,
+    bvid: str,
+    cid: Optional[int] = None,
+    aid: Optional[int] = None,
+    cookies: Optional[Dict[str, str]] = None,
+    duration: Optional[int] = None,
+    skip_cc: bool = False,
+) -> list:
     chain = []
 
     prefer = config.transcriber.prefer
 
-    # CC 字幕不需要额外配置，始终作为保底选项加入链中
-    chain.append(CCSubtitleTranscriber(bvid=bvid, prefer_language="zh", cid=cid))
+    # CC 字幕不需要额外配置，作为保底选项加入链中
+    # 如果调用方已经检测过 CC 字幕且确认没有，可设置 skip_cc=True 避免重复请求
+    if not skip_cc:
+        chain.append(CCSubtitleTranscriber(
+            bvid=bvid,
+            prefer_language="zh",
+            cid=cid,
+            aid=aid,
+            cookies=cookies,
+            duration=duration,
+        ))
 
     if prefer in ("auto", "volcengine"):
         if config.transcriber.volcengine.token and config.transcriber.volcengine.appid:

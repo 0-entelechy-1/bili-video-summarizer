@@ -6,6 +6,7 @@ from bili_analyzer.analyzer.base import (
     BaseAnalyzer,
     build_analysis_prompt,
     build_format_transcript_prompt,
+    normalize_transcript_format,
     parse_llm_response,
     validate_analysis_result,
 )
@@ -90,4 +91,4 @@ class DeepseekAnalyzer(BaseAnalyzer):
             max_tokens=8192,
         )
 
-        return response.choices[0].message.content
+        return normalize_transcript_format(response.choices[0].message.content)

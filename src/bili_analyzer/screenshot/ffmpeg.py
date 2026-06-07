@@ -9,6 +9,7 @@
 import logging
 import shutil
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -144,7 +145,7 @@ def batch_capture(
     screenshot_mapping = {}
     failed_count = 0
 
-    pbar = tqdm(total=len(tasks), desc="截取关键画面", unit="张") if show_progress else None
+    pbar = tqdm(total=len(tasks), desc="截取关键画面", unit="张", file=sys.stdout, dynamic_ncols=True, miniters=1) if show_progress else None
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_task = {

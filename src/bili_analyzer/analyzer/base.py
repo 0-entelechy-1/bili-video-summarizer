@@ -4,6 +4,7 @@
 """
 
 import json
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict
@@ -106,8 +107,18 @@ def build_format_transcript_prompt(srt_content: str) -> str:
         "   - 第一行: 【HH:MM:SS — HH:MM:SS】（该段的起止时间，不含毫秒）\n"
         "   - 第二行: 　　段落正文（前缀两个全角空格缩进）\n"
         "   - 段落之间空一行\n"
-        "3. 不要遗漏任何字幕内容\n"
-        "4. 直接输出排版后的纯文本，不要输出任何解释、标题或额外标记\n\n"
+        "3. **段落正文必须是连续文本**：同一语义段落内的所有字幕行应合并为一段连续文字，"
+        "段落内不要换行，不要为每行字幕单独添加缩进前缀\n"
+        "4. 不要遗漏任何字幕内容\n"
+        "5. 直接输出排版后的纯文本，不要输出任何解释、标题或额外标记\n\n"
+        "**正确格式示例**:\n"
+        "【00:01:23 — 00:02:45】\n"
+        "　　这是一段连续的文字内容，多行字幕已经合并为一个段落，段落内不换行。\n\n"
+        "**错误格式示例**（不要这样输出）:\n"
+        "【00:01:23 — 00:02:45】\n"
+        "　　这是第一行字幕\n"
+        "　　这是第二行字幕\n"
+        "　　这是第三行字幕\n\n"
         "**字幕内容**:\n"
         "```\n"
         f"{srt_content}\n"
@@ -115,6 +126,49 @@ def build_format_transcript_prompt(srt_content: str) -> str:
         "请开始排版。"
     )
     return prompt
+
+
+def normalize_transcript_format(text: str) -> str:
+    """后处理：将字幕排版文本中的多行段落合并为连续段落
+
+    LLM 可能输出每行字幕单独带缩进的格式，此函数将其修正为：
+    每个时间段内只有一行正文，正文前缀两个全角空格。
+
+    Args:
+        text: LLM 输出的排版文本
+
+    Returns:
+        str: 修正后的排版文本
+    """
+    if not text or not text.strip():
+        return text
+
+    lines = text.split('\n')
+    result = []
+    current_header = None
+    current_text_parts = []
+
+    time_header_pattern = re.compile(r'【\d{2}:\d{2}:\d{2}\s*—\s*\d{2}:\d{2}:\d{2}】')
+
+    for line in lines:
+        stripped = line.strip()
+        if time_header_pattern.match(stripped):
+            # 遇到新的时间段头部，先保存前一个段落
+            if current_header is not None:
+                merged = ''.join(current_text_parts)
+                result.append(f'{current_header}\n　　{merged}')
+            current_header = stripped
+            current_text_parts = []
+        elif stripped:
+            # 正文行：去掉全角空格前缀后拼接
+            current_text_parts.append(stripped.lstrip('\u3000'))
+
+    # 保存最后一个段落
+    if current_header is not None:
+        merged = ''.join(current_text_parts)
+        result.append(f'{current_header}\n　　{merged}')
+
+    return '\n\n'.join(result)
 
 
 def parse_llm_response(response: str) -> Dict[str, Any]:

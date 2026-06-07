@@ -11,6 +11,7 @@ from bili_analyzer.analyzer.base import (
     BaseAnalyzer,
     build_analysis_prompt,
     build_format_transcript_prompt,
+    normalize_transcript_format,
     parse_llm_response,
     validate_analysis_result,
 )
@@ -60,7 +61,7 @@ class ZhipuAnalyzer(BaseAnalyzer):
         except ImportError:
             response_text = self._call_with_openai_sdk(prompt, force_json=False)
 
-        return response_text
+        return normalize_transcript_format(response_text)
 
     def _call_with_zhipuai_sdk(self, prompt: str, force_json: bool = True) -> str:
         """使用 zhipuai SDK 调用"""
@@ -71,17 +72,26 @@ class ZhipuAnalyzer(BaseAnalyzer):
         print(f"正在调用智谱 API (模型: {self.model})...")
         print("  这可能需要30-120秒，请耐心等待...")
 
+        if force_json:
+            system_content = (
+                "你是一位专业的学术内容分析专家。"
+                "请严格按照要求的 JSON 格式返回分析结果,"
+                "不要包含任何其他文字、解释或 markdown 标记。"
+                "直接输出纯 JSON 对象。"
+            )
+        else:
+            system_content = (
+                "你是一位专业的文字排版专家。"
+                "请按照要求的格式对字幕进行语义分段排版,"
+                "直接输出排版后的纯文本,不要包含任何解释或额外标记。"
+            )
+
         kwargs = {
             "model": self.model,
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "你是一位专业的学术内容分析专家。"
-                        "请严格按照要求的 JSON 格式返回分析结果,"
-                        "不要包含任何其他文字、解释或 markdown 标记。"
-                        "直接输出纯 JSON 对象。"
-                    )
+                    "content": system_content,
                 },
                 {"role": "user", "content": prompt}
             ],
@@ -110,17 +120,26 @@ class ZhipuAnalyzer(BaseAnalyzer):
         print(f"正在调用智谱 API (模型: {self.model}, OpenAI兼容模式)...")
         print("  这可能需要30-120秒，请耐心等待...")
 
+        if force_json:
+            system_content = (
+                "你是一位专业的学术内容分析专家。"
+                "请严格按照要求的 JSON 格式返回分析结果,"
+                "不要包含任何其他文字、解释或 markdown 标记。"
+                "直接输出纯 JSON 对象。"
+            )
+        else:
+            system_content = (
+                "你是一位专业的文字排版专家。"
+                "请按照要求的格式对字幕进行语义分段排版,"
+                "直接输出排版后的纯文本,不要包含任何解释或额外标记。"
+            )
+
         kwargs = {
             "model": self.model,
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "你是一位专业的学术内容分析专家。"
-                        "请严格按照要求的 JSON 格式返回分析结果,"
-                        "不要包含任何其他文字、解释或 markdown 标记。"
-                        "直接输出纯 JSON 对象。"
-                    )
+                    "content": system_content,
                 },
                 {"role": "user", "content": prompt}
             ],

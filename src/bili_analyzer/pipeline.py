@@ -374,7 +374,7 @@ def _analyze_single_page(
     }
 
     from bili_analyzer.transcriber.cc_subtitle import CCSubtitleTranscriber
-    cc_transcriber = CCSubtitleTranscriber(bvid=bvid, prefer_language="zh", cid=page_info.cid, cookies=cookies)
+    cc_transcriber = CCSubtitleTranscriber(bvid=bvid, prefer_language="zh", cid=page_info.cid, cookies=cookies, aid=video_info.aid, duration=page_info.duration)
 
     if cc_transcriber.has_subtitle():
         print("检测到CC字幕，跳过语音识别")
@@ -385,7 +385,7 @@ def _analyze_single_page(
         logger.info("未检测到CC字幕，使用语音识别")
 
         from bili_analyzer.transcriber import get_transcriber_chain
-        transcriber_chain = get_transcriber_chain(config, bvid, cid=page_info.cid)
+        transcriber_chain = get_transcriber_chain(config, bvid, cid=page_info.cid, aid=video_info.aid, cookies=cookies, duration=page_info.duration, skip_cc=True)
 
         if not transcriber_chain:
             raise RuntimeError(

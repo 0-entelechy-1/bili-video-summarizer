@@ -24,6 +24,8 @@ class CCSubtitleTranscriber(BaseTranscriber):
         prefer_language: str = "zh",
         cid: Optional[int] = None,
         cookies: Optional[Dict[str, str]] = None,
+        aid: Optional[int] = None,
+        duration: Optional[int] = None,
     ):
         """
         Args:
@@ -32,12 +34,16 @@ class CCSubtitleTranscriber(BaseTranscriber):
             prefer_language: 优先语言
             cid: 分P ID
             cookies: B站 Cookie 字典
+            aid: 视频 aid
+            duration: 视频时长（秒），用于校验字幕是否匹配
         """
         self.bvid = bvid
         self.prefer_human = prefer_human
         self.prefer_language = prefer_language
         self.cid = cid
         self.cookies = cookies
+        self.aid = aid
+        self.duration = duration
         self._cached_srt: Optional[str] = None
         self._cached_cid: Optional[int] = None
 
@@ -67,6 +73,8 @@ class CCSubtitleTranscriber(BaseTranscriber):
                 prefer_language=self.prefer_language,
                 cid=self.cid,
                 cookies=self.cookies,
+                aid=self.aid,
+                duration=self.duration,
             )
             if srt_content is not None:
                 self._cached_srt = srt_content
@@ -101,6 +109,8 @@ class CCSubtitleTranscriber(BaseTranscriber):
                 prefer_language=self.prefer_language,
                 cid=self.cid,
                 cookies=self.cookies,
+                aid=self.aid,
+                duration=self.duration,
             )
         except RuntimeError as e:
             error_msg = str(e)

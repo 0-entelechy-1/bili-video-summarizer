@@ -198,7 +198,7 @@ def get_pages(bvid: str) -> List[PageInfo]:
     return result
 
 
-def get_subtitle_metas(aid: int, cid: int) -> List[SubtitleMeta]:
+def get_subtitle_metas(aid: int, cid: int, bvid: Optional[str] = None) -> List[SubtitleMeta]:
     """获取视频的 CC 字幕元数据列表
 
     使用旧接口 /x/player/v2 绕过 WBI 签名风控。
@@ -207,6 +207,7 @@ def get_subtitle_metas(aid: int, cid: int) -> List[SubtitleMeta]:
     Args:
         aid: av 号
         cid: cid
+        bvid: BV 号（可选，传入可提高API匹配准确性）
 
     Returns:
         List[SubtitleMeta]: 字幕元数据列表，无字幕时返回空列表
@@ -219,15 +220,22 @@ def get_subtitle_metas(aid: int, cid: int) -> List[SubtitleMeta]:
     except Exception:
         pass
 
+    # 构建请求参数，同时传入 bvid 以确保 API 正确匹配视频
+    params: Dict[str, object] = {"aid": aid, "cid": cid}
+    if bvid:
+        params["bvid"] = bvid
+
+    logger.debug(f"获取字幕元数据: aid={aid}, cid={cid}, bvid={bvid}")
+
     # 使用旧接口，不需要 WBI 签名
     resp = _request_with_retry(
         session, "https://api.bilibili.com/x/player/v2",
-        params={"aid": aid, "cid": cid}
+        params=params
     )
 
     data = resp.json()
     if data["code"] != 0:
-        logger.warning(f"获取字幕元数据失败: code={data.get('code')}, message={data.get('message')}")
+        logger.warning(f"获取字幕元数据失败: code={data.get('code')}, message={data.get('message')}, aid={aid}, cid={cid}, bvid={bvid}")
         return []
 
     subtitles = data.get("data", {}).get("subtitle", {}).get("subtitles", [])
@@ -248,6 +256,7 @@ def get_subtitle_metas(aid: int, cid: int) -> List[SubtitleMeta]:
             is_ai=sub.get("ai_status", 0) != 0,
         ))
 
+    logger.debug(f"字幕元数据结果: 找到 {len(result)} 条字幕, aid={aid}, cid={cid}, bvid={bvid}")
     return result
 
 
@@ -333,12 +342,52 @@ def subtitle_to_srt(lines: List[SubtitleLine]) -> str:
     return "\n".join(srt_parts)
 
 
+def validate_subtitle_duration(srt_content: str, video_duration: int, tolerance: int = 30) -> bool:
+    """校验字幕时长是否与视频时长匹配
+
+    通过解析SRT内容获取最后一条字幕的结束时间，与视频时长比较。
+    如果偏差超过容忍度，认为字幕可能不是该视频的。
+
+    Args:
+        srt_content: SRT 格式字幕文本
+        video_duration: 视频时长（秒）
+        tolerance: 允许的时长偏差（秒），默认30秒
+
+    Returns:
+        bool: 字幕时长与视频时长匹配返回 True
+    """
+    # 从SRT内容中提取最后一条字幕的结束时间
+    time_pattern = re.findall(r'(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})', srt_content)
+    if not time_pattern:
+        logger.warning("字幕校验: 未找到时间戳，无法校验")
+        return True  # 无法校验时默认通过
+
+    last_end_str = time_pattern[-1][1]
+    h, m, s_ms = last_end_str.split(':')
+    s, ms = s_ms.split(',')
+    last_end_seconds = int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
+
+    diff = abs(last_end_seconds - video_duration)
+    if diff > tolerance:
+        logger.warning(
+            f"字幕时长校验失败: 字幕最后时间戳={last_end_seconds:.1f}秒, "
+            f"视频时长={video_duration}秒, 偏差={diff:.1f}秒 (容忍度={tolerance}秒), "
+            f"字幕可能不是该视频的"
+        )
+        return False
+
+    logger.debug(f"字幕时长校验通过: 字幕最后时间戳={last_end_seconds:.1f}秒, 视频时长={video_duration}秒, 偏差={diff:.1f}秒")
+    return True
+
+
 def fetch_cc_subtitle(
     bvid: str,
     prefer_human: bool = True,
     prefer_language: str = "zh",
     cid: Optional[int] = None,
     cookies: Optional[Dict[str, str]] = None,
+    aid: Optional[int] = None,
+    duration: Optional[int] = None,
 ) -> Optional[str]:
     """获取 B站视频的 CC 字幕（便捷方法）
 
@@ -349,17 +398,22 @@ def fetch_cc_subtitle(
         prefer_human: 是否优先选择人工字幕
         prefer_language: 优先语言前缀，如 "zh"
         cid: 指定分P的 cid，为 None 时使用视频默认 cid
+        aid: 指定视频的 aid，为 None 时内部获取
+        duration: 视频时长（秒），用于校验字幕是否匹配
 
     Returns:
         Optional[str]: SRT 格式字幕文本，无字幕时返回 None
     """
     # 获取视频信息（需要 aid 和 cid）
-    video_info = get_video_info(bvid)
-    aid = video_info.aid
-    use_cid = cid if cid is not None else video_info.cid
+    if aid is None or cid is None:
+        video_info = get_video_info(bvid)
+        if aid is None:
+            aid = video_info.aid
+        if cid is None:
+            cid = video_info.cid
 
     # 获取字幕元数据
-    metas = get_subtitle_metas(aid, use_cid)
+    metas = get_subtitle_metas(aid, cid, bvid=bvid)
 
     if not metas:
         return None
@@ -378,10 +432,20 @@ def fetch_cc_subtitle(
     if selected is None:
         selected = candidates[0]
 
+    logger.debug(f"选中字幕: language={selected.language}, is_ai={selected.is_ai}, url={selected.url[:80]}...")
+
     # 获取字幕内容
     lines = get_subtitle_content(selected, cookies=cookies)
 
     if not lines:
         return None
 
-    return subtitle_to_srt(lines)
+    srt_content = subtitle_to_srt(lines)
+
+    # 校验字幕时长是否与视频时长匹配
+    if duration is not None and duration > 0:
+        if not validate_subtitle_duration(srt_content, duration):
+            logger.warning("CC字幕时长与视频时长不匹配，字幕可能不是该视频的，将跳过CC字幕")
+            return None
+
+    return srt_content

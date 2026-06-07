@@ -1,0 +1,168 @@
+@import "tailwindcss";
+
+:root {
+  --bili-blue: #00AEEC;
+  --bili-pink: #FB7299;
+  --bili-dark: #0F0F0F;
+  --bili-gray: #18181B;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background-color: var(--bili-dark);
+  color: #fff;
+  min-height: 100vh;
+  margin: 0;
+}
+
+.dark {
+  --bili-dark: #0F0F0F;
+  --bili-gray: #18181B;
+}
+
+.light {
+  --bili-dark: #F5F5F5;
+  --bili-gray: #FFFFFF;
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bili-gray);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Markdown 样式 */
+.markdown-body {
+  color: #e0e0e0;
+  line-height: 1.8;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  color: #fff;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  font-weight: 600;
+}
+
+.markdown-body h1 {
+  font-size: 1.75rem;
+  border-bottom: 1px solid #333;
+  padding-bottom: 0.3em;
+}
+
+.markdown-body h2 {
+  font-size: 1.5rem;
+}
+
+.markdown-body h3 {
+  font-size: 1.25rem;
+}
+
+.markdown-body p {
+  margin: 1em 0;
+}
+
+.markdown-body code {
+  background: #2d2d2d;
+  padding: 0.2em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.markdown-body pre {
+  background: #1e1e1e;
+  padding: 1em;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.markdown-body pre code {
+  background: none;
+  padding: 0;
+}
+
+.markdown-body img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+.markdown-body a {
+  color: var(--bili-blue);
+  text-decoration: none;
+}
+
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+
+.markdown-body blockquote {
+  border-left: 3px solid var(--bili-pink);
+  padding-left: 1em;
+  margin-left: 0;
+  color: #999;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.5em;
+}
+
+.markdown-body li {
+  margin: 0.5em 0;
+}
+
+/* 终端日志样式 */
+.terminal-log {
+  font-family: "Consolas", "Monaco", "Courier New", monospace;
+  font-size: 0.875rem;
+  background: #0a0a0a;
+  padding: 1rem;
+  border-radius: 8px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.terminal-log .log-line {
+  padding: 2px 0;
+  opacity: 0.9;
+}
+
+.terminal-log .log-line.info {
+  color: #e0e0e0;
+}
+
+.terminal-log .log-line.warning {
+  color: #f59e0b;
+}
+
+.terminal-log .log-line.error {
+  color: #ef4444;
+}
+
+.terminal-log .log-line.step {
+  color: var(--bili-blue);
+  font-weight: 600;
+}

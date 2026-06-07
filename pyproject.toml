@@ -31,6 +31,15 @@ whisper = ["openai-whisper>=20231117"]
 volcengine = []
 # 安装所有可选功能
 all = ["zhipuai>=2.0.0", "openai>=1.0.0", "openai-whisper>=20231117"]
+# Web 界面依赖
+web = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "sqlalchemy>=2.0.0",
+    "aiosqlite>=0.20.0",
+    "python-multipart>=0.0.9",
+    "pydantic>=2.0.0",
+]
 # 开发工具
 dev = ["pytest>=7.0", "ruff>=0.1.0"]
 
