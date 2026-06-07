@@ -1,13 +1,13 @@
 """B站扫码登录模块
 
-提供二维码登录、凭证保存/加载功能。
+提供二维码登录、Netscape 格式 Cookie 保存/加载功能。
+--login 扫码成功后，cookie 写入项目根目录下的 cookies.txt，
+格式与 yt-dlp 兼容，可同时被 B站 API 和 yt-dlp 复用。
 """
 
-import json
 import logging
 import time
 import webbrowser
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
@@ -18,8 +18,10 @@ logger = logging.getLogger("bili_analyzer")
 
 _QRCODE_GENERATE_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
 _QRCODE_POLL_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll"
-_CREDENTIALS_DIR = Path.home() / ".bili_analyzer"
-_CREDENTIALS_FILE = _CREDENTIALS_DIR / "credentials.json"
+# 项目根目录 = src/bili_analyzer/api/auth.py → 向上 4 层
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# --login 默认写入位置：项目根目录下的 cookies.txt
+PROJECT_ROOT_COOKIES_FILE = PROJECT_ROOT / "cookies.txt"
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Referer": "https://www.bilibili.com",
@@ -148,38 +150,56 @@ def _session_cookies_to_dict(jar) -> Dict[str, str]:
     return {cookie.name: cookie.value for cookie in jar}
 
 
-def save_credentials(cookies: Dict[str, str]) -> None:
-    """保存 Cookie 到本地文件
+def save_cookies_netscape(cookies: Dict[str, str], filepath: Path) -> None:
+    """将 cookie 字典以 Netscape HTTP Cookie File 格式写入文件
+
+    格式与 yt-dlp 兼容：每行 7 个 tab 分隔字段
+    (domain, flag, path, secure, expires, name, value)。
 
     Args:
-        cookies: Cookie 字典
+        cookies: Cookie 字典 {name: value}
+        filepath: 目标文件路径
     """
-    _CREDENTIALS_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "cookies": cookies,
-        "saved_at": datetime.now().isoformat(),
-    }
-    with open(_CREDENTIALS_FILE, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    logger.info(f"凭证已保存到 {_CREDENTIALS_FILE}")
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["# Netscape HTTP Cookie File", ""]
+    for name, value in cookies.items():
+        # secure 列写 FALSE：与 B站原始 Set-Cookie 行为（无 Secure 标志）、
+        # 与 yt-dlp 输出格式保持一致；HTTPS-only 限制对 B站全站 HTTPS 无影响
+        lines.append(f".bilibili.com\tTRUE\t/\tFALSE\t0\t{name}\t{value}")
+    filepath.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    logger.info(f"Cookies 已保存到: {filepath} ({len(cookies)} 项)")
 
 
-def load_credentials() -> Optional[Dict[str, str]]:
-    """从本地文件加载 Cookie
+def load_cookies_netscape(filepath: Path) -> Optional[Dict[str, str]]:
+    """从 Netscape 格式的 cookies 文件中解析出 cookie 字典
+
+    跳过空行与 `#` 开头行；按 tab 切分后取第 5/6 列（name/value）。
+
+    Args:
+        filepath: cookies 文件路径
 
     Returns:
-        Optional[Dict[str, str]]: Cookie 字典，文件不存在时返回 None
+        Optional[Dict[str, str]]: 解析得到的 cookie 字典，文件不存在时返回 None
     """
-    if not _CREDENTIALS_FILE.exists():
+    filepath = Path(filepath)
+    if not filepath.is_file():
         return None
-
-    with open(_CREDENTIALS_FILE, "r", encoding="utf-8") as f:
-        payload = json.load(f)
-
-    cookies = payload.get("cookies")
+    cookies: Dict[str, str] = {}
+    with open(filepath, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n").rstrip("\r")
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 7:
+                continue
+            name, value = parts[5], parts[6]
+            if name:
+                cookies[name] = value
     if cookies:
-        logger.info(f"已从 {_CREDENTIALS_FILE} 加载凭证")
-    return cookies
+        logger.info(f"已从 {filepath} 加载凭证 ({len(cookies)} 项)")
+    return cookies or None
 
 
 def display_qrcode_terminal(url: str) -> bool:
@@ -218,7 +238,7 @@ def display_qrcode_browser(url: str) -> None:
 def perform_login() -> Optional[Dict[str, str]]:
     """完整的登录流程
 
-    获取二维码 -> 显示二维码 -> 轮询状态 -> 保存凭证
+    获取二维码 -> 显示二维码 -> 轮询状态 -> 保存 Cookie（项目根目录下 cookies.txt）
 
     Returns:
         Optional[Dict[str, str]]: 登录成功返回 cookies，失败返回 None
@@ -246,9 +266,9 @@ def perform_login() -> Optional[Dict[str, str]]:
     if success and cookies:
         print("\n✅ 登录成功！")
         print(f"   已保存 Cookie ({len(cookies)} 项)")
-        print(f"   凭证文件: {_CREDENTIALS_FILE}")
+        print(f"   凭证文件: {PROJECT_ROOT_COOKIES_FILE}")
         print("\n下次运行程序时将自动加载此凭证")
-        save_credentials(cookies)
+        save_cookies_netscape(cookies, PROJECT_ROOT_COOKIES_FILE)
         return cookies
 
     print("\n❌ 登录失败")

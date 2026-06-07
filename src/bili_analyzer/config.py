@@ -211,6 +211,12 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     # 2. 环境变量覆盖
     config = _apply_env_overrides(config)
 
+    # 3. transcriber.cookies_file 默认指向项目根目录下的 cookies.txt
+    #    --login 扫码登录后会把凭证写到该路径，yt-dlp 与 B站 API 都直接复用
+    if not config.transcriber.cookies_file:
+        project_root = Path(__file__).resolve().parent.parent.parent
+        config.transcriber.cookies_file = str(project_root / "cookies.txt")
+
     return config
 
 

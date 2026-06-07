@@ -236,12 +236,12 @@ def _load_bilibili_cookie(cookie_str: str) -> Optional[Dict[str, str]]:
     if cookie_str:
         cookies = _parse_cookie_str(cookie_str)
 
-    # 2. 尝试从本地凭证文件加载
+    # 2. 尝试从项目根目录下的 cookies.txt（Netscape 格式）加载
     if not cookies:
-        from bili_analyzer.api.auth import load_credentials
-        cookies = load_credentials()
+        from bili_analyzer.api.auth import load_cookies_netscape, PROJECT_ROOT_COOKIES_FILE
+        cookies = load_cookies_netscape(PROJECT_ROOT_COOKIES_FILE)
         if cookies:
-            print("已从本地凭证文件加载 B站 Cookie")
+            print(f"已从 {PROJECT_ROOT_COOKIES_FILE} 加载 B站 Cookie")
 
     if cookies:
         from bili_analyzer.api.bilibili import set_cookies
@@ -249,7 +249,8 @@ def _load_bilibili_cookie(cookie_str: str) -> Optional[Dict[str, str]]:
         print(f"已加载 B站 Cookie ({len(cookies)} 项)")
         logger.info(f"已加载 B站 Cookie ({len(cookies)} 项)")
     else:
-        print("未配置 B站 Cookie，部分功能可能受限，使用 --login 扫码登录")
+        print("未配置 B站 Cookie，部分功能可能受限")
+        print("  请先运行: python -m bili_analyzer --login  扫码登录")
         logger.info("未配置 B站 Cookie")
 
     return cookies
