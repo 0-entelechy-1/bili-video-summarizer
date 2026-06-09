@@ -8,9 +8,12 @@ import time
 from typing import Any, Dict, Tuple
 
 from bili_analyzer.analyzer.base import (
+    ANALYSIS_SYSTEM_PROMPT,
+    FORMAT_TRANSCRIPT_SYSTEM_PROMPT,
     BaseAnalyzer,
-    build_analysis_prompt,
-    build_format_transcript_prompt,
+    build_analysis_task_instruction,
+    build_cached_messages,
+    build_format_transcript_task_instruction,
     normalize_transcript_format,
     parse_llm_response,
     validate_analysis_result,
@@ -94,7 +97,12 @@ class DeepseekAnalyzer(BaseAnalyzer):
         """使用 DeepSeek API 分析字幕内容"""
         from openai import OpenAI
 
-        prompt = build_analysis_prompt(video_info, srt_content)
+        # 启用 prefix cache：SRT 作为独立 user message 处于 messages[1] 位置
+        messages = build_cached_messages(
+            ANALYSIS_SYSTEM_PROMPT,
+            srt_content,
+            build_analysis_task_instruction(video_info),
+        )
 
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
@@ -103,18 +111,7 @@ class DeepseekAnalyzer(BaseAnalyzer):
             with spinner(f"调用 DeepSeek API ({self.model}) 中…  30-120 秒，请耐心等待") as sp:
                 response = client.chat.completions.create(
                     model=self.model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "你是一位专业的学术内容分析专家。"
-                                "请严格按照要求的 JSON 格式返回分析结果,"
-                                "不要包含任何其他文字、解释或 markdown 标记。"
-                                "直接输出纯 JSON 对象。"
-                            )
-                        },
-                        {"role": "user", "content": prompt}
-                    ],
+                    messages=messages,
                     temperature=0.3,
                     max_tokens=8192,
                     response_format={"type": "json_object"},
@@ -131,7 +128,7 @@ class DeepseekAnalyzer(BaseAnalyzer):
 
         usage = _extract_usage(response, self.model, step="analyze")
         usage.duration_seconds = time.time() - _t0
-        _log_and_show_usage(usage, len(prompt), content or "")
+        _log_and_show_usage(usage, len(srt_content), content or "")
 
         result = parse_llm_response(content)
         validate_analysis_result(result)
@@ -143,9 +140,15 @@ class DeepseekAnalyzer(BaseAnalyzer):
         return result, usage
 
     def format_transcript(self, srt_content: str) -> Tuple[str, TokenUsage]:
+        """使用 DeepSeek API 排版字幕"""
         from openai import OpenAI
 
-        prompt = build_format_transcript_prompt(srt_content)
+        # 启用 prefix cache：与 analyze 调用共享 messages[1] 的 SRT 内容
+        messages = build_cached_messages(
+            FORMAT_TRANSCRIPT_SYSTEM_PROMPT,
+            srt_content,
+            build_format_transcript_task_instruction(),
+        )
 
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
@@ -154,17 +157,7 @@ class DeepseekAnalyzer(BaseAnalyzer):
             with spinner("调用 DeepSeek API 进行字幕分段排版…") as sp:
                 response = client.chat.completions.create(
                     model=self.model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "你是一位专业的文字排版专家。"
-                                "请按照要求的格式对字幕进行语义分段排版,"
-                                "直接输出排版后的纯文本,不要包含任何解释或额外标记。"
-                            )
-                        },
-                        {"role": "user", "content": prompt}
-                    ],
+                    messages=messages,
                     temperature=0.3,
                     max_tokens=8192,
                 )
@@ -180,6 +173,6 @@ class DeepseekAnalyzer(BaseAnalyzer):
 
         usage = _extract_usage(response, self.model, step="format_transcript")
         usage.duration_seconds = time.time() - _t0
-        _log_and_show_usage(usage, len(prompt), content or "")
+        _log_and_show_usage(usage, len(srt_content), content or "")
 
         return normalize_transcript_format(content), usage

@@ -20,7 +20,7 @@ from typing import Dict, Any, List, Optional
 from bili_analyzer.config import AppConfig
 from bili_analyzer.analyzer.usage import TokenTracker
 from bili_analyzer.api.bilibili import extract_bvid, get_video_info, get_pages, PageInfo
-from bili_analyzer.downloader.ytdlp import download_video, check_ytdlp
+from bili_analyzer.downloader.ytdlp import download_video, check_ytdlp, DiskSpaceError
 from bili_analyzer.screenshot.ffmpeg import check_ffmpeg, batch_capture
 from bili_analyzer.parser.srt import parse_srt_file, get_full_transcript
 from bili_analyzer.reporter.markdown import generate_markdown
@@ -350,7 +350,7 @@ def _analyze_single_page(
         output_name = page_folder_name
 
     video_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"分P输出目录: {video_dir.resolve()}")
+    logger.info(f"分P输出目录: {video_dir}")
 
     # 构建视频下载 URL（多P需要 ?p=N 参数）
     page_video_url = f"https://www.bilibili.com/video/{bvid}?p={page_info.page}"
@@ -361,14 +361,28 @@ def _analyze_single_page(
 
     step_start = time.time()
 
-    video_path = download_video(
-        video_url=page_video_url,
-        output_dir=video_dir,
-        quality=config.download.quality,
-        cookies=cookies,
-        output_name=output_name,
-    )
-    logger.info(f"视频下载完成: {video_path}")
+    try:
+        video_path = download_video(
+            video_url=page_video_url,
+            output_dir=video_dir,
+            quality=config.download.quality,
+            cookies=cookies,
+            output_name=output_name,
+            duration_sec=page_info.duration,
+        )
+    except DiskSpaceError as e:
+        # 磁盘满：列出可执行清理建议（让用户知道下一步该做什么）
+        from bili_analyzer.downloader.ytdlp import estimate_required_mb
+        required_mb = estimate_required_mb(config.download.quality, page_info.duration)
+        print_error(f"分P《{page_info.title}》下载失败：磁盘空间不足（需 ~{required_mb}MB）")
+        print_warning("可执行以下命令清理后重试：")
+        print_warning(f"  1. 清理旧视频目录: Remove-Item '{output_dir}\\videos\\*' -Recurse -Force")
+        print_warning(f"  2. 清理 conda 缓存: conda clean --all -y")
+        print_warning(f"  3. 清理 pip 缓存: pip cache purge")
+        print_warning(f"  4. 清理旧日志: Remove-Item '{Path(__file__).parent.parent.parent}\\logs\\bili_analyzer_*.log' -Force")
+        logger.error(f"分P《{page_info.title}》磁盘空间不足：{e}")
+        raise  # 让上层走"分P失败"流程
+    # 注：download_video() 内部已 print_success + logger.info（带文件大小），这里不再重复记录
 
     step_elapsed = time.time() - step_start
     print_step_elapsed(step_elapsed)
@@ -436,7 +450,7 @@ def _analyze_single_page(
                 print_info(f"尝试使用 {transcriber.name} 转录…")
                 logger.info(f"尝试使用 {transcriber.name} 转录")
                 srt_path = transcriber.transcribe(video_path, video_dir)
-                logger.info(f"{transcriber.name} 转录成功: {srt_path}")
+                logger.info(f"{transcriber.name} 转录成功: {srt_path.name}")
                 break
             except Exception as ex:
                 logger.warning(f"{transcriber.name} 转录失败: {ex}")
@@ -504,29 +518,11 @@ def _analyze_single_page(
     print_step_elapsed(step_elapsed)
     logger.info("步骤 4 耗时: %s", format_elapsed(step_elapsed))
 
-    # ===== 步骤 5: 截取关键画面 =====
-    _print_step(5 + step_offset, total_steps, f"截取关键画面 - {page_info.title}")
-
-    step_start = time.time()
-
-    key_screenshots = analysis_result.get('key_screenshots', [])
-    screenshots_dir = video_dir / "screenshots"
-
-    screenshot_mapping = batch_capture(
-        video_path=video_path,
-        timestamps=key_screenshots,
-        output_dir=screenshots_dir,
-        quality=config.screenshot.quality,
-        max_workers=4,
-        show_progress=True,
-    )
-
-    step_elapsed = time.time() - step_start
-    print_step_elapsed(step_elapsed)
-    logger.info("步骤 5 耗时: %s", format_elapsed(step_elapsed))
-
-    # ===== 步骤 6: 生成报告 =====
-    _print_step(6 + step_offset, total_steps, f"生成学习笔记 - {page_info.title}")
+    # ===== 步骤 5: 生成学习笔记（含 LLM 排版，cache 命中点） =====
+    # 注：本步骤把"字幕排版" LLM 调用（与步骤 4 的 analyze 共享 prefix cache）
+    # 提到步骤 5，并先生成不含截图的报告草稿。
+    # 步骤 6 截取关键画面后，会用真实截图重新生成报告。
+    _print_step(5 + step_offset, total_steps, f"生成学习笔记 - {page_info.title}")
 
     step_start = time.time()
 
@@ -545,6 +541,39 @@ def _analyze_single_page(
         segments = parse_srt_file(srt_path)
         transcript_text = get_full_transcript(segments, include_timestamps=True)
 
+    # 草稿报告（不含截图，截图在步骤 6 截取后注入）
+    report_path = generate_markdown(
+        video_info=video_info_dict,
+        analysis=analysis_result,
+        screenshots={},  # 草稿不嵌入截图
+        srt_content=srt_content,
+        output_dir=reports_dir,
+        transcript_text=transcript_text,
+        timestamp=timestamp,
+    )
+
+    step_elapsed = time.time() - step_start
+    print_step_elapsed(step_elapsed)
+    logger.info("步骤 5 耗时: %s", format_elapsed(step_elapsed))
+
+    # ===== 步骤 6: 截取关键画面 + 用真实截图重新生成报告 =====
+    _print_step(6 + step_offset, total_steps, f"截取关键画面 - {page_info.title}")
+
+    step_start = time.time()
+
+    key_screenshots = analysis_result.get('key_screenshots', [])
+    screenshots_dir = video_dir / "screenshots"
+
+    screenshot_mapping = batch_capture(
+        video_path=video_path,
+        timestamps=key_screenshots,
+        output_dir=screenshots_dir,
+        quality=config.screenshot.quality,
+        max_workers=4,
+        show_progress=True,
+    )
+
+    # 用真实截图重新生成报告（覆盖步骤 5 的草稿）
     report_path = generate_markdown(
         video_info=video_info_dict,
         analysis=analysis_result,
@@ -625,7 +654,7 @@ def run_pipeline(config: AppConfig, timestamp: str = "") -> None:
 
         output_dir = Path(config.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"输出目录: {output_dir.resolve()}")
+        logger.info(f"输出目录: {output_dir}")
         print_info(f"输出目录: {output_dir.resolve()}")
 
         reports_dir = output_dir / "reports"

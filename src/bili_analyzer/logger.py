@@ -60,14 +60,15 @@ def setup_logger(log_dir: str = "", timestamp: str = "") -> logging.Logger:
     logger.addHandler(file_handler)
 
     # 控制台 handler：升级为 RichHandler，输出彩色 + 高亮 traceback
-    # INFO 级别及以上的常规日志通过 console 显示，让用户能实时看到流程进展
+    # WARNING 级别及以上才在终端显示；INFO 仅入文件（避免与 print_* 双轨输出造成视觉混乱）
+    # 用户需要看到的进度信息统一用 ui/console.py 的 print_* 辅助函数
     # 局部 import 避免 logger 模块成为 ui 模块的循环依赖入口
     from rich.logging import RichHandler
     from bili_analyzer.ui.console import console
 
     console_handler = RichHandler(
         console=console,
-        level=logging.INFO,
+        level=logging.WARNING,
         show_path=False,
         show_time=True,
         show_level=True,

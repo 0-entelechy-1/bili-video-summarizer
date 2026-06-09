@@ -15,9 +15,12 @@ import time
 from typing import Any, Dict, Tuple
 
 from bili_analyzer.analyzer.base import (
+    ANALYSIS_SYSTEM_PROMPT,
+    FORMAT_TRANSCRIPT_SYSTEM_PROMPT,
     BaseAnalyzer,
-    build_analysis_prompt,
-    build_format_transcript_prompt,
+    build_analysis_task_instruction,
+    build_cached_messages,
+    build_format_transcript_task_instruction,
     normalize_transcript_format,
     parse_llm_response,
     validate_analysis_result,
@@ -114,14 +117,28 @@ class ZhipuAnalyzer(BaseAnalyzer):
 
     def analyze(self, video_info: Dict, srt_content: str) -> Tuple[Dict[str, Any], TokenUsage]:
         """使用智谱 GLM API 分析字幕内容"""
-        prompt = build_analysis_prompt(video_info, srt_content)
+        # 启用 prefix cache：SRT 作为独立 user message 处于 messages[1] 位置
+        system_content = ANALYSIS_SYSTEM_PROMPT
+        task_instruction = build_analysis_task_instruction(video_info)
 
         # 优先尝试 zhipuai SDK
         try:
-            response_text, usage = self._call_with_zhipuai_sdk(prompt, force_json=True, step="analyze")
+            response_text, usage = self._call_with_zhipuai_sdk(
+                system_content=system_content,
+                srt_content=srt_content,
+                task_instruction=task_instruction,
+                force_json=True,
+                step="analyze",
+            )
         except ImportError:
             # 降级为 OpenAI SDK
-            response_text, usage = self._call_with_openai_sdk(prompt, force_json=True, step="analyze")
+            response_text, usage = self._call_with_openai_sdk(
+                system_content=system_content,
+                srt_content=srt_content,
+                task_instruction=task_instruction,
+                force_json=True,
+                step="analyze",
+            )
 
         result = parse_llm_response(response_text)
         validate_analysis_result(result)
@@ -133,49 +150,59 @@ class ZhipuAnalyzer(BaseAnalyzer):
         return result, usage
 
     def format_transcript(self, srt_content: str) -> Tuple[str, TokenUsage]:
-        prompt = build_format_transcript_prompt(srt_content)
+        """使用智谱 GLM API 排版字幕"""
+        # 启用 prefix cache：与 analyze 调用共享 messages[1] 的 SRT 内容
+        system_content = FORMAT_TRANSCRIPT_SYSTEM_PROMPT
+        task_instruction = build_format_transcript_task_instruction()
 
         try:
-            response_text, usage = self._call_with_zhipuai_sdk(prompt, force_json=False, step="format_transcript")
+            response_text, usage = self._call_with_zhipuai_sdk(
+                system_content=system_content,
+                srt_content=srt_content,
+                task_instruction=task_instruction,
+                force_json=False,
+                step="format_transcript",
+            )
         except ImportError:
-            response_text, usage = self._call_with_openai_sdk(prompt, force_json=False, step="format_transcript")
+            response_text, usage = self._call_with_openai_sdk(
+                system_content=system_content,
+                srt_content=srt_content,
+                task_instruction=task_instruction,
+                force_json=False,
+                step="format_transcript",
+            )
 
         return normalize_transcript_format(response_text), usage
 
-    def _call_with_zhipuai_sdk(self, prompt: str, force_json: bool = True, step: str = "unknown") -> Tuple[str, TokenUsage]:
+    def _call_with_zhipuai_sdk(
+        self,
+        system_content: str,
+        srt_content: str,
+        task_instruction: str,
+        force_json: bool = True,
+        step: str = "unknown",
+    ) -> Tuple[str, TokenUsage]:
         """使用 zhipuai SDK 调用
 
         注意：zhipuai SDK 旧版本不支持 `thinking` 关键字参数（会抛 TypeError）。
         本方法自动检测并通过 `extra_body` 透传给 OpenAI 兼容模式。
         如旧版 SDK 完全不支持，会降级为 OpenAI SDK 调用。
+
+        Args:
+            system_content: 系统提示（messages[0]）
+            srt_content: 字幕内容（messages[1]，与 format_transcript 共享，cache 命中点）
+            task_instruction: 任务指令（messages[2]）
         """
         from zhipuai import ZhipuAI
 
         client = ZhipuAI(api_key=self.api_key)
 
-        if force_json:
-            system_content = (
-                "你是一位专业的学术内容分析专家。"
-                "请严格按照要求的 JSON 格式返回分析结果,"
-                "不要包含任何其他文字、解释或 markdown 标记。"
-                "直接输出纯 JSON 对象。"
-            )
-        else:
-            system_content = (
-                "你是一位专业的文字排版专家。"
-                "请按照要求的格式对字幕进行语义分段排版,"
-                "直接输出排版后的纯文本,不要包含任何解释或额外标记。"
-            )
+        # 使用 build_cached_messages 构造 messages 数组，启用 prefix cache
+        messages = build_cached_messages(system_content, srt_content, task_instruction)
 
         kwargs = {
             "model": self.model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": system_content,
-                },
-                {"role": "user", "content": prompt}
-            ],
+            "messages": messages,
             "temperature": 0.3,
             "max_tokens": self.max_tokens,
         }
@@ -204,7 +231,13 @@ class ZhipuAnalyzer(BaseAnalyzer):
                     f"[zhipu.{step}] zhipuai SDK 不支持 thinking 参数，"
                     f"降级为 OpenAI SDK 兼容模式以启用 thinking: {e}"
                 )
-                return self._call_with_openai_sdk(prompt, force_json=force_json, step=step)
+                return self._call_with_openai_sdk(
+                    system_content=system_content,
+                    srt_content=srt_content,
+                    task_instruction=task_instruction,
+                    force_json=force_json,
+                    step=step,
+                )
             raise
         except Exception:
             # 异常情况下也要记录耗时
@@ -224,16 +257,29 @@ class ZhipuAnalyzer(BaseAnalyzer):
             # 即使返回空，也记录一次 usage（虽然可能是 0）
             usage = _extract_usage(response, self.model, step)
             usage.duration_seconds = time.time() - _t0
-            _log_and_show_usage(usage, len(prompt), content or "")
+            _log_and_show_usage(usage, len(srt_content) + len(task_instruction), content or "")
             raise RuntimeError("智谱 API 返回空内容")
 
         usage = _extract_usage(response, self.model, step)
         usage.duration_seconds = time.time() - _t0
-        _log_and_show_usage(usage, len(prompt), content)
+        _log_and_show_usage(usage, len(srt_content) + len(task_instruction), content)
         return content, usage
 
-    def _call_with_openai_sdk(self, prompt: str, force_json: bool = True, step: str = "unknown") -> Tuple[str, TokenUsage]:
-        """使用 OpenAI SDK 调用智谱 API（兼容模式）"""
+    def _call_with_openai_sdk(
+        self,
+        system_content: str,
+        srt_content: str,
+        task_instruction: str,
+        force_json: bool = True,
+        step: str = "unknown",
+    ) -> Tuple[str, TokenUsage]:
+        """使用 OpenAI SDK 调用智谱 API（兼容模式）
+
+        Args:
+            system_content: 系统提示（messages[0]）
+            srt_content: 字幕内容（messages[1]，与 format_transcript 共享，cache 命中点）
+            task_instruction: 任务指令（messages[2]）
+        """
         from openai import OpenAI
 
         client = OpenAI(
@@ -241,29 +287,12 @@ class ZhipuAnalyzer(BaseAnalyzer):
             base_url="https://open.bigmodel.cn/api/paas/v4/",
         )
 
-        if force_json:
-            system_content = (
-                "你是一位专业的学术内容分析专家。"
-                "请严格按照要求的 JSON 格式返回分析结果,"
-                "不要包含任何其他文字、解释或 markdown 标记。"
-                "直接输出纯 JSON 对象。"
-            )
-        else:
-            system_content = (
-                "你是一位专业的文字排版专家。"
-                "请按照要求的格式对字幕进行语义分段排版,"
-                "直接输出排版后的纯文本,不要包含任何解释或额外标记。"
-            )
+        # 使用 build_cached_messages 构造 messages 数组，启用 prefix cache
+        messages = build_cached_messages(system_content, srt_content, task_instruction)
 
         kwargs = {
             "model": self.model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": system_content,
-                },
-                {"role": "user", "content": prompt}
-            ],
+            "messages": messages,
             "temperature": 0.3,
             "max_tokens": self.max_tokens,
         }
@@ -297,10 +326,10 @@ class ZhipuAnalyzer(BaseAnalyzer):
         if not content or not content.strip():
             usage = _extract_usage(response, self.model, step)
             usage.duration_seconds = time.time() - _t0
-            _log_and_show_usage(usage, len(prompt), content or "")
+            _log_and_show_usage(usage, len(srt_content) + len(task_instruction), content or "")
             raise RuntimeError("智谱 API 返回空内容")
 
         usage = _extract_usage(response, self.model, step)
         usage.duration_seconds = time.time() - _t0
-        _log_and_show_usage(usage, len(prompt), content)
+        _log_and_show_usage(usage, len(srt_content) + len(task_instruction), content)
         return content, usage

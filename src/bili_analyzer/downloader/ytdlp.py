@@ -36,6 +36,64 @@ _BROWSER_UA = (
 _BROWSER_REFERER = "https://www.bilibili.com"
 
 
+class DiskSpaceError(RuntimeError):
+    """磁盘空间不足专用异常
+
+    由 download_video 在预检或 yt-dlp stderr 识别时抛出。
+    pipeline 捕获后应走"分P失败"流程并提供清理建议。
+    """
+
+
+# 画质码率（B站实测保守值，单位 MB/s）
+# 用于 download_video() 入口处的磁盘空间预检
+_BITRATE_MB_PER_SEC = {
+    "1080p": 1.5,
+    "720p": 0.8,
+    "480p": 0.4,
+    "best": 2.0,  # 兜底，按 4K HDR 估
+}
+
+
+def estimate_required_mb(quality: str, duration_sec: int) -> int:
+    """估算下载+合并所需磁盘空间（MB）
+
+    公式 = 码率 × 时长 × 1.5 buffer
+    buffer 1.5 考虑：视频轨+音频轨各占一份（merge 期间并存）、临时 .part/.tmp 残留、
+    同目录下若还有 ffmpeg 抽取的 .mp3（步骤 3 兜底用），
+    以及 yt-dlp 进程退出后 save_cookies 写文件的小余量。
+
+    Args:
+        quality: 画质（1080p/720p/480p/best）
+        duration_sec: 视频时长（秒）
+
+    Returns:
+        int: 估算所需空间（MB）
+    """
+    bitrate = _BITRATE_MB_PER_SEC.get(quality, 1.0)
+    return int(bitrate * max(0, duration_sec) * 1.5)
+
+
+def check_disk_space(required_mb: int, output_dir: Path) -> tuple:
+    """检查 output_dir 所在盘剩余空间
+
+    Args:
+        required_mb: 所需空间（MB）
+        output_dir: 目标输出目录
+
+    Returns:
+        (是否够用, 剩余空间 MB): bool, int
+
+    Raises:
+        OSError: 若 output_dir 所在路径无法访问
+    """
+    output_dir = Path(output_dir).resolve()
+    # 目录可能尚未创建（第一次下载时），用 parent 检查
+    target_for_check = output_dir if output_dir.exists() else output_dir.parent
+    usage = shutil.disk_usage(target_for_check)
+    free_mb = usage.free // (1024 * 1024)
+    return free_mb >= required_mb, free_mb
+
+
 def check_ytdlp() -> bool:
     if not shutil.which('yt-dlp'):
         raise RuntimeError(
@@ -268,11 +326,23 @@ def download_video(
     cookies: Optional[dict] = None,
     cookies_file: Optional[str] = None,
     output_name: str = "video",
+    duration_sec: int = 0,
 ) -> Path:
     check_ytdlp()
 
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 磁盘空间预检（提前捕获 ENOSPC，给用户友好提示）
+    # duration_sec=0 时跳过预检（兜底，避免破坏现有调用方）
+    if duration_sec > 0:
+        required_mb = estimate_required_mb(quality, duration_sec)
+        ok, free_mb = check_disk_space(required_mb, output_dir)
+        if not ok:
+            raise DiskSpaceError(
+                f"目标盘剩余空间不足：下载 + 合并预计需要约 {required_mb}MB，"
+                f"当前可用 {free_mb}MB。请清理后重试。"
+            )
 
     if video_url.startswith("BV"):
         video_url = f"https://www.bilibili.com/video/{video_url}/"
@@ -348,6 +418,12 @@ def download_video(
 
             if return_code != 0:
                 stderr_msg = stderr_text.strip()[:500]
+                # 双保险：即使预检通过，下载/合并过程中盘被占满时也识别
+                if "No space left on device" in stderr_text or "Errno 28" in stderr_text:
+                    raise DiskSpaceError(
+                        f"yt-dlp 合并/写入阶段磁盘已满（退出码 {return_code}）。"
+                        f"请清理 {output_dir} 所在盘后重试。"
+                    )
                 raise RuntimeError(f"视频下载失败 (退出码 {return_code}): {stderr_msg}")
     finally:
         if cookies_path and cookies_path.exists() and cookies_path == (output_dir / ".cookies.txt"):
@@ -374,7 +450,7 @@ def download_video(
 
     from bili_analyzer.ui.console import print_success
     print_success(f"视频已下载: {video_path.name} ({file_size_mb:.1f} MB)")
-    logger.info(f"视频下载完成: {video_path} ({file_size_mb:.1f} MB)")
+    logger.info(f"视频下载完成: {video_path.name} ({file_size_mb:.1f} MB)")
     return video_path
 
 
@@ -483,7 +559,9 @@ def download_subtitle(
         if target.exists():
             target.unlink()
         selected.rename(target)
-        logger.info(f"字幕已重命名: {selected.name} -> {target.name}")
+        # 用户可见：显示源字幕文件 → 规范化文件名（让用户知道用了哪个语种）
+        print_info(f"字幕已规范化: {selected.name} → {target.name}")
+        logger.debug(f"字幕重命名: {selected.name} -> {target.name}")
 
     from bili_analyzer.ui.console import print_success
     print_success(f"字幕已下载: {target.name}")
