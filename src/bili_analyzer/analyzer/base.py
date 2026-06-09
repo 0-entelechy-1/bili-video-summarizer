@@ -1,13 +1,16 @@
 """LLM 分析器基类
 
 定义统一接口和共享的 prompt 构建逻辑。
+接口返回 `(结果, TokenUsage)`，强制子类记录 token 消耗。
 """
 
 import json
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
+
+from bili_analyzer.analyzer.usage import TokenUsage
 
 
 def build_analysis_prompt(video_info: Dict, srt_content: str) -> str:
@@ -237,10 +240,15 @@ def validate_analysis_result(result: Dict[str, Any]) -> None:
 
 
 class BaseAnalyzer(ABC):
-    """LLM 分析器基类"""
+    """LLM 分析器基类
+
+    所有子类必须返回 `(result, TokenUsage)`：
+    - analyze() 返回 (dict分析结果, TokenUsage)
+    - format_transcript() 返回 (str排版文本, TokenUsage)
+    """
 
     @abstractmethod
-    def analyze(self, video_info: Dict, srt_content: str) -> Dict[str, Any]:
+    def analyze(self, video_info: Dict, srt_content: str) -> Tuple[Dict[str, Any], TokenUsage]:
         """分析字幕内容
 
         Args:
@@ -248,7 +256,7 @@ class BaseAnalyzer(ABC):
             srt_content: 字幕内容
 
         Returns:
-            Dict: 分析结果
+            Tuple[Dict, TokenUsage]: (分析结果, token 消耗记录)
         """
         ...
 
@@ -259,14 +267,14 @@ class BaseAnalyzer(ABC):
         ...
 
     @abstractmethod
-    def format_transcript(self, srt_content: str) -> str:
+    def format_transcript(self, srt_content: str) -> Tuple[str, TokenUsage]:
         """对字幕原文进行语义分段排版
 
         Args:
             srt_content: 原始 SRT 字幕内容
 
         Returns:
-            str: 段落化排版后的纯文本
+            Tuple[str, TokenUsage]: (段落化排版后的纯文本, token 消耗记录)
         """
         ...
 

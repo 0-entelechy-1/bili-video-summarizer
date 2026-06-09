@@ -16,6 +16,8 @@ import yaml
 class ZhipuConfig:
     api_key: str = ""
     model: str = "glm-4.7-flash"
+    max_tokens: int = 32768              # 输出 token 上限；官方推荐 65536，模型最大 128K
+    thinking_enabled: bool = True        # 启用 GLM-4.7 思考模式（Chain-of-Thought）
 
 
 @dataclass
@@ -109,6 +111,12 @@ def _apply_env_overrides(config: AppConfig) -> AppConfig:
     # 智谱
     if os.getenv("ZHIPU_API_KEY"):
         config.llm.zhipu.api_key = os.environ["ZHIPU_API_KEY"]
+    if os.getenv("ZHIPU_MODEL"):
+        config.llm.zhipu.model = os.environ["ZHIPU_MODEL"]
+    if os.getenv("ZHIPU_MAX_TOKENS"):
+        config.llm.zhipu.max_tokens = int(os.environ["ZHIPU_MAX_TOKENS"])
+    if os.getenv("ZHIPU_THINKING_ENABLED"):
+        config.llm.zhipu.thinking_enabled = os.environ["ZHIPU_THINKING_ENABLED"].lower() in ("1", "true", "yes", "on")
     # DeepSeek
     if os.getenv("DEEPSEEK_API_KEY"):
         config.llm.deepseek.api_key = os.environ["DEEPSEEK_API_KEY"]
@@ -138,6 +146,10 @@ def _dict_to_config(data: dict) -> AppConfig:
         if zhipu_data:
             config.llm.zhipu.api_key = zhipu_data.get("api_key", config.llm.zhipu.api_key)
             config.llm.zhipu.model = zhipu_data.get("model", config.llm.zhipu.model)
+            config.llm.zhipu.max_tokens = zhipu_data.get("max_tokens", config.llm.zhipu.max_tokens)
+            config.llm.zhipu.thinking_enabled = zhipu_data.get(
+                "thinking_enabled", config.llm.zhipu.thinking_enabled
+            )
         deepseek_data = llm_data.get("deepseek", {})
         if deepseek_data:
             config.llm.deepseek.api_key = deepseek_data.get("api_key", config.llm.deepseek.api_key)

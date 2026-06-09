@@ -28,7 +28,12 @@ def create_analyzer(config: AppConfig) -> BaseAnalyzer:
         if not api_key:
             raise ValueError("未配置 ZHIPU_API_KEY")
         from bili_analyzer.analyzer.zhipu import ZhipuAnalyzer
-        return ZhipuAnalyzer(api_key=api_key, model=config.llm.zhipu.model)
+        return ZhipuAnalyzer(
+            api_key=api_key,
+            model=config.llm.zhipu.model,
+            max_tokens=config.llm.zhipu.max_tokens,
+            thinking_enabled=config.llm.zhipu.thinking_enabled,
+        )
 
     if provider == "deepseek":
         api_key = config.llm.deepseek.api_key
@@ -66,6 +71,8 @@ def get_analyzer_chain(config: AppConfig) -> List[BaseAnalyzer]:
         chain.append(ZhipuAnalyzer(
             api_key=config.llm.zhipu.api_key,
             model=config.llm.zhipu.model,
+            max_tokens=config.llm.zhipu.max_tokens,
+            thinking_enabled=config.llm.zhipu.thinking_enabled,
         ))
     elif provider == "deepseek" and config.llm.deepseek.api_key:
         from bili_analyzer.analyzer.deepseek import DeepseekAnalyzer
@@ -89,6 +96,8 @@ def get_analyzer_chain(config: AppConfig) -> List[BaseAnalyzer]:
         chain.append(ZhipuAnalyzer(
             api_key=config.llm.zhipu.api_key,
             model=config.llm.zhipu.model,
+            max_tokens=config.llm.zhipu.max_tokens,
+            thinking_enabled=config.llm.zhipu.thinking_enabled,
         ))
 
     # 最终降级为交互式

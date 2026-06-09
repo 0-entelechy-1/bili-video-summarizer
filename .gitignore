@@ -23,6 +23,5 @@ config.yaml
 
 data/
 tests/
+docs/
 cookies.txt
-debug-subtitle-download-empty.md
-WAF_TRUST_ISSUE.md

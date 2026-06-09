@@ -18,7 +18,7 @@ import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator, List, Optional
+from typing import TYPE_CHECKING, Dict, Iterator, List, Optional
 
 from rich.console import Console
 from rich.live import Live
@@ -447,3 +447,76 @@ def is_no_color() -> bool:
             pass
         return True
     return False
+
+
+def print_token_usage(usage) -> None:
+    """单次 LLM 调用的 token 消耗可视化
+
+    Args:
+        usage: bili_analyzer.analyzer.usage.TokenUsage 实例
+    """
+    # 延迟导入避免循环依赖
+    from bili_analyzer.analyzer.usage import TokenUsage
+
+    if not isinstance(usage, TokenUsage):
+        return
+
+    if usage.provider == "interactive":
+        console.print(f"  [dim]🪙  {usage.model} · 交互式（无 API 调用）[/]")
+        return
+
+    # finish_reason 为 stop 时绿色，否则黄色（异常提示）
+    is_normal = usage.finish_reason in ("stop", "interactive")
+    color = "green" if is_normal else "yellow"
+    cached_part = (
+        f"  [dim]缓存命中 {usage.cached_tokens:,}[/]" if usage.cached_tokens else ""
+    )
+    step_label = {
+        "analyze": "分析",
+        "format_transcript": "排版",
+    }.get(usage.step, usage.step)
+
+    console.print(
+        f"  [bold {color}]🪙  {usage.provider}/{usage.model} · {step_label}[/]"
+    )
+    console.print(
+        f"     [cyan]prompt[/] [bold]{usage.prompt_tokens:,}[/]   "
+        f"[cyan]completion[/] [bold]{usage.completion_tokens:,}[/]   "
+        f"[cyan]total[/] [bold {color}]{usage.total_tokens:,}[/]   "
+        f"[dim]({usage.duration_seconds:.1f}s, finish={usage.finish_reason})[/]"
+        f"{cached_part}"
+    )
+
+
+def print_total_token_summary(all_token_totals: List[Dict]) -> None:
+    """所有分P 的 token 累计汇总
+
+    Args:
+        all_token_totals: list of dict，每个 dict 由 TokenTracker.totals() 返回
+    """
+    if not all_token_totals:
+        return
+
+    agg = {
+        "prompt": sum(t.get("prompt", 0) for t in all_token_totals),
+        "completion": sum(t.get("completion", 0) for t in all_token_totals),
+        "total": sum(t.get("total", 0) for t in all_token_totals),
+        "cached": sum(t.get("cached", 0) for t in all_token_totals),
+        "calls": sum(t.get("calls", 0) for t in all_token_totals),
+    }
+
+    if agg["calls"] == 0 or agg["total"] == 0:
+        console.print("  [dim]🪙  LLM Token 总消耗: 0 (交互式模式，无 API 调用)[/]")
+        return
+
+    cached_part = (
+        f"  [dim]缓存命中 {agg['cached']:,}[/]" if agg["cached"] else ""
+    )
+    console.print()
+    console.print(
+        f"  [bold cyan]🪙  LLM Token 总消耗:[/]   "
+        f"[cyan]prompt[/] [bold]{agg['prompt']:,}[/]   "
+        f"[cyan]completion[/] [bold]{agg['completion']:,}[/]   "
+        f"[cyan]total[/] [bold green]{agg['total']:,}[/]   "
+        f"[dim]({agg['calls']} 次调用){cached_part}[/]"
+    )

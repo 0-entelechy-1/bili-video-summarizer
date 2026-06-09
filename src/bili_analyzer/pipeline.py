@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from bili_analyzer.config import AppConfig
+from bili_analyzer.analyzer.usage import TokenTracker
 from bili_analyzer.api.bilibili import extract_bvid, get_video_info, get_pages, PageInfo
 from bili_analyzer.downloader.ytdlp import download_video, check_ytdlp
 from bili_analyzer.screenshot.ffmpeg import check_ffmpeg, batch_capture
@@ -36,6 +37,7 @@ from bili_analyzer.ui.console import (
     print_step_header,
     print_summary_table,
     print_success,
+    print_total_token_summary,
     print_video_card,
     print_warning,
 )
@@ -315,6 +317,7 @@ def _analyze_single_page(
     video_path = None
     result = {}
     _page_start = time.time()  # 整个分P处理的起始时间（用于最终 elapsed）
+    token_tracker = TokenTracker()  # 本分P 的 LLM token 累计
 
     # 构建输出目录和文件名，附加时间戳避免目录复用导致断点续传冲突
     if not timestamp:
@@ -471,7 +474,8 @@ def _analyze_single_page(
         try:
             print_info(f"尝试使用 {analyzer.name} 分析…")
             logger.info(f"尝试使用 {analyzer.name} 分析")
-            analysis_result = analyzer.analyze(video_info_dict, srt_content)
+            analysis_result, analyze_usage = analyzer.analyze(video_info_dict, srt_content)
+            token_tracker.add(analyze_usage)
             success_analyzer = analyzer
             logger.info(f"{analyzer.name} 分析成功")
             break
@@ -531,7 +535,8 @@ def _analyze_single_page(
         try:
             print_info(f"使用 {success_analyzer.name} 进行字幕排版…")
             logger.info(f"使用 {success_analyzer.name} 进行字幕排版")
-            transcript_text = success_analyzer.format_transcript(srt_content)
+            transcript_text, format_usage = success_analyzer.format_transcript(srt_content)
+            token_tracker.add(format_usage)
             logger.info("字幕原文语义分段排版完成")
         except Exception as e:
             logger.warning(f"字幕分段排版失败: {e}")
@@ -577,6 +582,8 @@ def _analyze_single_page(
     result["title"] = page_info.title
     result["elapsed"] = format_elapsed(time.time() - _page_start)
     result["elapsed_seconds"] = time.time() - _page_start
+    result["token_usage_summary"] = token_tracker.totals()
+    result["token_usages"] = [u.to_log_dict() for u in token_tracker.usages]
 
     return result
 
@@ -705,6 +712,10 @@ def run_pipeline(config: AppConfig, timestamp: str = "") -> None:
                     "elapsed": r.get("elapsed", ""),
                 })
             print_summary_table(table_rows)
+
+            # LLM Token 总消耗汇总（跨分P 累加）
+            all_token_totals = [r.get("token_usage_summary", {}) for r in all_results if r.get("token_usage_summary")]
+            print_total_token_summary(all_token_totals)
 
             # 详细路径列表（路径太长，单独放在 Table 之后用嵌套结构展示）
             console.print()

@@ -6,7 +6,7 @@
 
 import sys
 import re
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -18,11 +18,13 @@ from bili_analyzer.analyzer.base import (
     parse_llm_response,
     validate_analysis_result,
 )
+from bili_analyzer.analyzer.usage import TokenUsage
 from bili_analyzer.parser.srt import parse_srt_file, get_full_transcript
 from bili_analyzer.ui.console import (
     console,
     print_info,
     print_success,
+    print_token_usage,
     spinner,
 )
 
@@ -34,7 +36,7 @@ class InteractiveAnalyzer(BaseAnalyzer):
     def name(self) -> str:
         return "交互式"
 
-    def analyze(self, video_info: Dict, srt_content: str) -> Dict[str, Any]:
+    def analyze(self, video_info: Dict, srt_content: str) -> Tuple[Dict[str, Any], TokenUsage]:
         """交互式分析：输出 prompt，等待用户粘贴 LLM 返回的 JSON"""
         prompt = build_analysis_prompt(video_info, srt_content)
 
@@ -79,9 +81,17 @@ class InteractiveAnalyzer(BaseAnalyzer):
         validate_analysis_result(result)
 
         print_success("分析结果验证通过")
-        return result
+        # 交互式无 API 调用，标记 finish_reason=interactive
+        usage = TokenUsage(
+            provider="interactive",
+            model="manual",
+            step="analyze",
+            finish_reason="interactive",
+        )
+        print_token_usage(usage)
+        return result, usage
 
-    def format_transcript(self, srt_content: str) -> str:
+    def format_transcript(self, srt_content: str) -> Tuple[str, TokenUsage]:
         lines = srt_content.strip().split('\n')
         text_lines = []
         for line in lines:
@@ -93,4 +103,11 @@ class InteractiveAnalyzer(BaseAnalyzer):
             if re.match(r'[\d:,]+\s*-->\s*[\d:,]+', stripped):
                 continue
             text_lines.append(stripped)
-        return '　　' + ''.join(text_lines)
+        # 交互式本地处理，无 API 调用
+        usage = TokenUsage(
+            provider="interactive",
+            model="manual",
+            step="format_transcript",
+            finish_reason="interactive",
+        )
+        return '　　' + ''.join(text_lines), usage
