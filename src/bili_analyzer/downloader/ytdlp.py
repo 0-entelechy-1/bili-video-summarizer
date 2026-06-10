@@ -349,10 +349,27 @@ def download_video(
 
     output_template = str(output_dir / f"{output_name}.%(ext)s")
 
+    # format_map 同时支持横屏 (landscape) 和竖屏 (portrait) 视频
+    # 横屏: width > height，过滤 height（短边）；竖屏: width < height，过滤 width（短边）
+    # B 站 16:9 portrait 的长边 = 短边 × 16/9 ≈ 1.78，故长边上限 = 质量名 × 1.78
+    # 例如 480p 横屏 852x480、480p 竖屏 480x852，长边都是 852
+    # 末尾 bestvideo+bestaudio 兜底：万一 quality 完全不可用，至少下到任意最佳流
     format_map = {
-        "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-        "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-        "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+        "1080p": (
+            "bestvideo[height<=1920][width>=1080]+bestaudio"   # 横屏 1920x1080
+            "/bestvideo[height>=1080][width<=1920]+bestaudio"  # 竖屏 1080x1920
+            "/bestvideo+bestaudio"
+        ),
+        "720p": (
+            "bestvideo[height<=1280][width>=720]+bestaudio"
+            "/bestvideo[height>=720][width<=1280]+bestaudio"
+            "/bestvideo+bestaudio"
+        ),
+        "480p": (
+            "bestvideo[height<=852][width>=480]+bestaudio"
+            "/bestvideo[height>=480][width<=852]+bestaudio"
+            "/bestvideo+bestaudio"
+        ),
         "best": "bestvideo+bestaudio/best",
     }
     format_str = format_map.get(quality, format_map["1080p"])
